@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body {
+  background: #101316;
+  color: #e7eaed;
+  font-family: Archivo, system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+* { box-sizing: border-box; }
+
+.lbl {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  color: #848d96;
+}
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+select, input[type=number], input[type=text] {
+  width: 100%;
+  background: #0c0f12;
+  color: #e7eaed;
+  border: 1px solid #333b43;
+  border-radius: 5px;
+  padding: 6px 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+select:focus-visible, input:focus-visible, button:focus-visible {
+  outline: 2px solid #c9a063; outline-offset: 1px;
+}
+input[type=range] { accent-color: #c9a063; width: 100%; }
+
+.panel { background: #1c2126; border: 1px solid #333b43; border-radius: 7px; }
+.phead {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 11px; background: #242a30; border-bottom: 1px solid #333b43;
+  border-radius: 6px 6px 0 0;
+}
+.scroll { scrollbar-width: thin; scrollbar-color: #434d57 transparent; }
+.scroll::-webkit-scrollbar { width: 7px; height: 7px; }
+.scroll::-webkit-scrollbar-thumb { background: #434d57; border-radius: 4px; }
+
+.chip {
+  font-family: var(--font-mono); font-size: 9px; font-weight: 600;
+  letter-spacing: .08em; padding: 2px 6px; border-radius: 3px; white-space: nowrap;
+}
+@media print {
+  .no-print { display: none !important; }
+  body { background: #fff; color: #000; }
+}
