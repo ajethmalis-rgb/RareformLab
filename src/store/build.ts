@@ -9,6 +9,11 @@ import {
   type TireSize, type MountStyle,
 } from '@/engine';
 import { VEHICLES, byId, type VehicleVariant } from '@/data/vehicles';
+import { useSubmissions, variantKey } from '@/store/submissions';
+import {
+  aggregateVariant, envelopeFromConsensus, camberOverrideFrom, travelOverrideFrom,
+  type VariantConsensus,
+} from '@/engine/aggregate';
 import { lipsFor, barrelsFor, shellsFor, discVariants, type FinishId } from '@/data/components';
 import { ORIGINAL_FACES, faceById } from '@/data/faces';
 
@@ -248,6 +253,7 @@ export interface AxleAnalysis {
 export function analyseAxle(
   vehicle: VehicleVariant, axle: Axle, cfg: AxleConfig,
   susp: SuspensionConfig, measured: MeasuredOverrides,
+  consensus?: VariantConsensus,
 ): AxleAnalysis {
   const d = cfg.diameterIn;
   const lip = lipsFor(d).find(x => x.id === cfg.outerLipId) ?? lipsFor(d)[0];
@@ -272,7 +278,24 @@ export function analyseAxle(
   const widthIn = assembly.achievedWidthIn > 0 ? assembly.achievedWidthIn : 8;
   const tire = mountTire(cfg.tire, widthIn);
 
-  const envBase = axle === 'front' ? vehicle.front : vehicle.rear;
+  let envBase = axle === 'front' ? vehicle.front : vehicle.rear;
+
+  /*
+   * Contributed measurements, where the community has corroborated them,
+   * replace the library's estimated envelope. This is the entire payoff of
+   * the contribution loop: the geometry handed to the solver is the same
+   * kind of object either way, so a corroborated variant simply starts
+   * returning real verdicts with no change to the solver at all.
+   * Anything the community has not measured falls back to the preset, so a
+   * partly measured corner improves rather than regressing to unknown.
+   */
+  if (consensus && envBase) {
+    envBase = envelopeFromConsensus(
+      consensus, envBase.kinematics, axle,
+      axle === 'front' ? 'Strut body / spring' : 'Trailing arm / spring',
+      envBase,
+    );
+  }
   const dropMm = axle === 'front' ? susp.dropFrontMm : susp.dropRearMm;
   const camberOverride = axle === 'front' ? susp.camberFrontDeg : susp.camberRearDeg;
 
@@ -299,6 +322,9 @@ export function analyseAxle(
     };
   }
 
+  const communityCamber = consensus ? camberOverrideFrom(consensus) : null;
+  const communityTravel = consensus ? travelOverrideFrom(consensus) : null;
+
   const state = resolveCornerState(
     envelope?.kinematics ?? {
       architecture: axle === 'front' ? vehicle.frontArchitecture : vehicle.rearArchitecture,
@@ -307,8 +333,16 @@ export function analyseAxle(
     {
       package: susp.package, dropMm, compressionMm: susp.compressionMm,
       steeringDeg: susp.steeringDeg,
-      camberDegOverride: camberOverride,
-      travelMmOverride: measured.travelMm,
+      // a measurement the user took on their own car beats the community
+      // consensus, which in turn beats the architecture's rule of thumb
+      camberDegOverride: camberOverride ?? communityCamber?.deg ?? null,
+      camberOverrideGrade: camberOverride !== null && camberOverride !== undefined
+        ? 'community_reported'
+        : communityCamber?.grade,
+      travelMmOverride: measured.travelMm ?? communityTravel?.mm ?? null,
+      travelGradeOverride: measured.travelMm !== null && measured.travelMm !== undefined
+        ? 'community_reported'
+        : communityTravel?.grade,
     },
   );
 
@@ -338,10 +372,24 @@ export function analyseAxle(
 
 export function useAnalysis() {
   const s = useBuild();
+  const submissions = useSubmissions(st => st.submissions);
   const vehicle = byId(s.vehicleId) ?? VEHICLES[0]!;
+
+  const consensusFor = (axle: Axle): VariantConsensus => aggregateVariant(
+    variantKey({
+      vehicleId: vehicle.id, axle,
+      suspensionPackage: s.suspension.package, brakePackage: 'factory',
+    }),
+    submissions,
+  );
+
+  const frontConsensus = consensusFor('front');
+  const rearConsensus = consensusFor('rear');
+
   return {
     vehicle,
-    front: analyseAxle(vehicle, 'front', s.front, s.suspension, s.measuredFront),
-    rear: analyseAxle(vehicle, 'rear', s.rear, s.suspension, s.measuredRear),
+    frontConsensus, rearConsensus,
+    front: analyseAxle(vehicle, 'front', s.front, s.suspension, s.measuredFront, frontConsensus),
+    rear: analyseAxle(vehicle, 'rear', s.rear, s.suspension, s.measuredRear, rearConsensus),
   };
 }

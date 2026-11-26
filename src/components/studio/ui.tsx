@@ -75,13 +75,15 @@ export function VerdictChip({ v, small }: { v: ClearanceVerdict; small?: boolean
 const GRADE_LABEL: Record<EvidenceGrade, string> = {
   manufacturer_documented: 'FACTORY DOC',
   professionally_measured: 'PRO MEASURED',
-  community_reported: 'USER MEASURED',
+  community_corroborated: 'CORROBORATED',
+  community_reported: 'SINGLE REPORT',
   estimated: 'ESTIMATED',
   unknown: 'NO DATA',
 };
 const GRADE_COLOR: Record<EvidenceGrade, string> = {
   manufacturer_documented: '#4fa97e',
   professionally_measured: '#4fa97e',
+  community_corroborated: '#4fa97e',
   community_reported: '#6a9ec4',
   estimated: '#e07b39',
   unknown: '#7c858f',

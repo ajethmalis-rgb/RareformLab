@@ -13,7 +13,7 @@ geometry tells you what offset that produces and whether the car can take it.
 ```bash
 npm install
 npm run dev          # http://localhost:3000  →  /studio
-npm test             # 61 unit tests
+npm test             # 88 unit tests
 npm run typecheck    # strict TS, no errors
 npm run build        # production build
 ```
@@ -41,7 +41,7 @@ Everything derived from the wheel and tyre alone:
 - Barrel splits, exposed lip, hardware count, target-vs-achieved offset
 - Camber projection, and every delta against the factory package
 
-61 unit tests check these against hand-calculated values and published tyre data. Each
+88 unit tests check these against hand-calculated values and published tyre data. Each
 expectation is worked out in a comment above it; none is snapshotted from the
 implementation's own output.
 
@@ -62,13 +62,14 @@ them, and a user measurement overrides the library estimate with full traceabili
 
 Every dimension carries an `EvidenceGrade`:
 
-| Grade | Meaning |
-| --- | --- |
-| `manufacturer_documented` | Factory drawing, CAD, homologation document |
-| `professionally_measured` | CMM, calibrated jig, shop scan |
-| `community_reported` | Owner measurement with a stated method |
-| `estimated` | Derived or inferred — **not a measurement** |
-| `unknown` | Absent. `NaN`, never zero. |
+| Grade | Meaning | Counts as evidence? |
+| --- | --- | --- |
+| `manufacturer_documented` | Factory drawing, CAD, homologation document | yes |
+| `professionally_measured` | CMM, calibrated jig, shop scan, verified submitter | yes |
+| `community_corroborated` | 3+ independent owners agreeing within tolerance | **yes** |
+| `community_reported` | A single owner measurement with a stated method | no |
+| `estimated` | Derived or inferred — **not a measurement** | no |
+| `unknown` | Absent. `NaN`, never zero. | no |
 
 The collision engine returns two verdicts per check:
 
@@ -89,8 +90,74 @@ Consequences worth understanding, because they look like bugs and are not:
 - Steered conditions are **not evaluated** without steering-axis geometry. They are
   skipped and listed as skipped, rather than guessed at.
 
-The only thing in this repository carrying a verified pass is a **synthetic test fixture**,
-and it is not a car.
+The only thing in this repository carrying a verified pass out of the box is a
+**synthetic test fixture**, and it is not a car. Real vehicles get there the only way
+they can: somebody measures them. See **The contribution loop** below.
+
+---
+
+## The contribution loop
+
+This is how a chassis stops being an estimate, and it is the only mechanism in the
+product that makes the library compound.
+
+One person with a tape measure produces a data point. It could be a mis-read, a car with
+a quietly repaired arch, or a variant nobody realised was different. Three independent
+people arriving within a few millimetres of each other is **evidence**, and the engine
+treats it as such: `community_corroborated` is in `VERIFIED_GRADES`, so that variant
+starts returning real clearance verdicts instead of UNKNOWN.
+
+Admitting that grade is the most consequential decision in the data model. Refusing it
+would be safer-looking and useless — nobody measures their car for a badge that stays
+grey forever. What keeps it honest is the bar in `aggregate.ts`:
+
+1. **Distinct submitters.** One keen owner measuring three times is one opinion.
+2. **Agreement inside an instrument-derived band.** Tape measurements cannot inherit a
+   caliper's tolerance by sitting next to one; the band is `3 x` the coarsest method
+   present, floored at 5 mm.
+3. **Outliers excluded, not averaged.** Averaging a wrong number moves the consensus
+   toward it. Median and median-absolute-deviation throughout, because with four hand
+   measurements one transposed digit destroys a mean and barely moves a median.
+4. **Disagreement surfaced, never resolved by arithmetic.** If the scatter exceeds what
+   the instrument explains, the submissions are two camps rather than a cluster, and the
+   engine reports a conflict and hands the solver *nothing*. A MAD-scaled threshold alone
+   would find no outliers in `380, 381, 420, 421` and cheerfully report a corroborated
+   400.5 mm — a figure nobody measured, sitting between two real clusters. That case is
+   a test.
+5. **Modified bodywork held out.** A rolled or pulled arch describes that car, not the
+   model. Kept on record and shown; never aggregated.
+6. **Nothing promotes automatically.** Arithmetic rejects the impossible; a person
+   accepts what is left.
+
+### What a contributor is asked for
+
+Four measurements make a corner analysable, plus camber:
+
+| Measurement | Why it decides something |
+| --- | --- |
+| Fender lip to hub centre, vertical | Whether the tyre can reach the lip at all |
+| Hub face to fender lip, lateral | Where the lip sits across the car |
+| Hub face to nearest inner obstruction | The inboard limit |
+| Hub travel remaining to the bump stop | What static-only calculators ignore |
+| Camber at the stated ride height | Where the tyre shoulder actually sits |
+
+Camber is contributable rather than left to a rule of thumb, because without it every
+arch verdict is capped at `estimated` by the architecture's typical gain rate. Several
+cars of one variant measured at the same height are corroborating a real point on that
+variant's camber curve.
+
+Submitting the fitted wheel is optional and worth the thirty seconds: it enables the
+cross-check that catches the commonest error, an arch radius smaller than the fitted
+tyre's radius, which means the tape went to the top of the tyre rather than the hub.
+
+### Pages
+
+- `/contribute` — guided submission with live validation
+- `/review` — the queue, plus a per-variant consensus view with the spread plotted,
+  outliers ringed, the agreement band drawn and the conflict state visible
+
+Seeded example records are **pending**, deliberately: an accepted example would reach
+consensus on its own and quietly promote a real chassis to green off invented numbers.
 
 ---
 
@@ -162,7 +229,7 @@ fender-coverage matter; it is not a rub, and the engine reports them separately.
 
 | Area | State |
 | --- | --- |
-| Deterministic geometry engine | **Done**, 61 passing tests |
+| Deterministic geometry engine | **Done**, 88 passing tests |
 | Evidence grading end to end | **Done**, enforced in the solver and the optimiser |
 | Synthetic verified fixture (collision / marginal / clear) | **Done** |
 | Multipiece assembly from real component increments | **Done** |
@@ -194,17 +261,23 @@ Stated plainly rather than implied:
   conditions are skipped, not faked.
 - **AI photoreal rendering.** Needs a server-side provider and a key. The native 3D view
   is the working export path; no image-generation success is simulated.
-- **PostgreSQL / Supabase, accounts, admin ingestion UI.** Local persistence only, with a
-  versioned schema ready for migration.
+- **PostgreSQL / Supabase and accounts.** Submissions live in browser storage, which is
+  the wrong home for shared evidence — the whole point is that one person's measurement
+  reaches the next person. The schema is already server-shaped (stable ids, submitter
+  ids, statuses, validated records), so this is a transport change.
+- **Photo upload against a calibration reference.** The schema admits
+  `photogrammetry` as a method and flags it for review; no upload path exists yet.
 - **Supplier part numbers, prices, availability.** No supplier catalogue is connected.
   Component IDs are generic trade sizes, and cross-supplier compatibility is not assumed.
 - **PDF export via headless rendering.** Print CSS plus text and JSON export instead.
 
 ## Roadmap
 
-**Phase 2** — Measurement ingestion with photo upload and a calibration reference;
-validated collision geometry for the first measured chassis; steering and compression
-states once kinematics exist; worker-based analysis for large optimiser searches.
+**Phase 2 — done.** Submission schema with plausibility and cross-checks, consensus
+with corroboration and conflict detection, review queue, and the studio consuming
+contributed geometry in place of the chassis estimate. Still open within it: photo
+upload with a calibration reference, and a server-backed store (the schema is already
+server-shaped, so that is a transport change rather than a rewrite).
 
 **Phase 3** — Measured assets for E30, E34, W124 and 964; showroom rendering; build
 comparison with synchronised views; PDF export.
@@ -238,6 +311,8 @@ npm test
 | `tire.test.ts` | Measuring rim vs published values, overall diameter for four known sizes, 5 mm-per-half-inch growth, stretch boundaries, approved-range flagging, measured circumference preference, speedo deviation, sidewall-vs-flange widest point, size finder filters |
 | `collision.test.ts` | The three acceptance cases from computed distances, arch interference, the evidence rule in three forms, condition skipping, arch-modification credit, exact baseline deltas |
 | `optimizer.test.ts` | Constraint enforcement (spacers, stretch, untouched metal, clearance floor, verified-only), rejection reporting, verified/unverified separation, goal ranking |
+| `aggregate.test.ts` | Median/MAD, promotion at three distinct submitters, people-not-rows, outlier exclusion, the two-camps case that a MAD-only threshold would miss, instrument honesty, variant rollup, validation cross-checks |
+| `contribution-e2e.test.ts` | The acceptance test for the whole loop: identical geometry reads UNKNOWN on the estimate and CLEAR once three people have measured it, and the un-measured well ceiling stays UNKNOWN throughout |
 | `library.test.ts` | The counts this README quotes, so the document cannot drift from the data; plus the honesty invariants — a catalogue entry cannot acquire geometry, an illustrative envelope cannot be graded above `estimated`, a reference face cannot become configurable |
 
 The synthetic fixture `FIX-1` produces, from computed distances alone:

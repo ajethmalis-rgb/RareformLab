@@ -1,5 +1,7 @@
 'use client';
+import Link from 'next/link';
 import { useBuild, useAnalysis } from '@/store/build';
+import { nextNeed } from '@/engine/aggregate';
 import { Panel, Field, Note, Btn, GradeChip } from './ui';
 import { isKnown } from '@/engine/types';
 
@@ -32,7 +34,8 @@ const STEPS = [
 
 export function Measurement() {
   const s = useBuild();
-  const { vehicle, front, rear } = useAnalysis();
+  const { vehicle, front, rear, frontConsensus, rearConsensus } = useAnalysis();
+  const consensus = s.axle === 'front' ? frontConsensus : rearConsensus;
   const measured = s.axle === 'front' ? s.measuredFront : s.measuredRear;
   const a = s.axle === 'front' ? front : rear;
   const envelope = s.axle === 'front' ? vehicle.front : vehicle.rear;
@@ -55,6 +58,30 @@ export function Measurement() {
       right={anyMeasured
         ? <GradeChip g="community_reported" />
         : <GradeChip g={vehicle.assetState === 'catalog_entry_only' ? 'unknown' : 'estimated'} />}>
+      <div className="border border-line rounded p-2.5 mb-2 bg-graphite-900">
+        <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
+          <span className="lbl">Community data for this variant</span>
+          <GradeChip g={consensus.weakestCoreGrade} />
+        </div>
+        <p className="text-[11px] leading-snug text-bone-dim">{nextNeed(consensus)}</p>
+        {consensus.analysable && (
+          <p className="text-[10.5px] leading-snug mt-1" style={{ color: '#4fa97e' }}>
+            Corroborated measurements are in use for this corner, in place of the chassis
+            estimate. That is why the verdicts above can resolve rather than reading UNKNOWN.
+          </p>
+        )}
+        <div className="flex gap-2 mt-2">
+          <Link href="/contribute"
+            className="font-mono text-[10px] font-semibold px-2 py-1 rounded border border-line text-bone-dim">
+            CONTRIBUTE MEASUREMENTS
+          </Link>
+          <Link href="/review"
+            className="font-mono text-[10px] font-semibold px-2 py-1 rounded border border-line text-bone-dim">
+            REVIEW QUEUE
+          </Link>
+        </div>
+      </div>
+
       <Note tone={anyMeasured ? 'mute' : 'warn'}>
         {anyMeasured
           ? 'Your measurements are in use and are traced as user-measured. They override the library estimate for this corner.'

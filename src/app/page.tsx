@@ -27,11 +27,17 @@ export default function Home() {
           geometry tells you what offset that gives you and whether the car can take it.
         </p>
 
-        <Link href="/studio"
-          className="inline-block mt-7 font-mono text-[12px] font-semibold tracking-[0.1em] px-5 py-2.5 rounded"
-          style={{ background: '#c9a063', color: '#101316' }}>
-          OPEN FITMENT STUDIO →
-        </Link>
+        <div className="flex gap-3 flex-wrap mt-7">
+          <Link href="/studio"
+            className="inline-block font-mono text-[12px] font-semibold tracking-[0.1em] px-5 py-2.5 rounded"
+            style={{ background: '#c9a063', color: '#101316' }}>
+            OPEN FITMENT STUDIO →
+          </Link>
+          <Link href="/contribute"
+            className="inline-block font-mono text-[12px] font-semibold tracking-[0.1em] px-5 py-2.5 rounded border border-line text-bone-dim">
+            CONTRIBUTE A MEASUREMENT
+          </Link>
+        </div>
 
         <section className="mt-14 border border-line rounded-lg overflow-hidden">
           <div className="phead"><h2 className="lbl" style={{ color: '#b3bbc3' }}>What this does and does not know</h2></div>
@@ -78,7 +84,26 @@ export default function Home() {
           ))}
         </div>
 
-        <section className="mt-10 grid md:grid-cols-2 gap-5">
+        <section className="mt-10 border border-line rounded-lg p-5">
+          <h3 className="lbl mb-2" style={{ color: '#c9a063' }}>How a chassis stops being an estimate</h3>
+          <p className="text-[13px] leading-relaxed text-bone-dim">
+            One person with a tape measure produces a data point. It could be a mis-read, a
+            car with a quietly repaired arch, or a variant nobody realised was different.
+            Three independent people arriving within a few millimetres of each other is
+            evidence, and the engine treats it as such: that variant starts returning real
+            clearance verdicts instead of UNKNOWN.
+          </p>
+          <p className="text-[13px] leading-relaxed text-bone-dim mt-2.5">
+            Outliers are excluded rather than averaged in, because averaging a wrong number
+            moves the consensus toward it. Submitters are counted as people, not rows, so one
+            keen owner measuring three times is still one opinion. And if the submissions
+            split into two camps rather than cluster, the engine reports a disagreement
+            instead of inventing a midpoint nobody measured — the thing it will not do is
+            resolve a conflict with arithmetic and present the result as confidence.
+          </p>
+        </section>
+
+        <section className="mt-5 grid md:grid-cols-2 gap-5">
           <div className="border border-line rounded-lg p-5">
             <h3 className="lbl mb-2" style={{ color: '#c9a063' }}>Wheel faces</h3>
             <p className="text-[12.5px] leading-relaxed text-bone-dim">

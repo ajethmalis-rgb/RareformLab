@@ -8,28 +8,77 @@ import { z } from 'zod';
  * codebase — it is what stops the product from inventing safety.
  */
 export const EvidenceGrade = z.enum([
-  'manufacturer_documented', // factory drawing, TIS, homologation doc
-  'professionally_measured', // CMM, calibrated jig, scan by a shop
-  'community_reported',      // owner measurement, stated method
-  'estimated',               // derived or inferred — NOT a measurement
-  'unknown',                 // absent
+  'manufacturer_documented',  // factory drawing, TIS, homologation doc
+  'professionally_measured',  // CMM, calibrated jig, scan by a shop
+  'community_corroborated',   // N independent owners, agreeing within tolerance
+  'community_reported',       // a single owner measurement, stated method
+  'estimated',                // derived or inferred — NOT a measurement
+  'unknown',                  // absent
 ]);
 export type EvidenceGrade = z.infer<typeof EvidenceGrade>;
 
-/** Grades the engine will treat as load-bearing for a pass/fail verdict. */
+/**
+ * Grades the engine will treat as load-bearing for a pass/fail verdict.
+ *
+ * `community_corroborated` is in this list deliberately, and it is the most
+ * consequential decision in the data model. Several independent people,
+ * measuring the same variant with a tape and arriving within a few
+ * millimetres of each other, have produced real evidence — that is how
+ * engineering data gets validated everywhere else, and refusing to admit it
+ * would make the contribution loop pointless. Nobody measures their car for
+ * a badge that stays grey forever.
+ *
+ * What keeps it honest is the bar in `aggregate.ts`: distinct submitters,
+ * agreement inside a stated tolerance, outliers excluded rather than
+ * averaged away, and the spread carried forward into the reported margin.
+ * A single submission never reaches this grade however confident it sounds.
+ */
 export const VERIFIED_GRADES: readonly EvidenceGrade[] = [
   'manufacturer_documented',
   'professionally_measured',
+  'community_corroborated',
 ];
 
 export const isVerified = (g: EvidenceGrade): boolean =>
   VERIFIED_GRADES.includes(g);
+
+/** Ordering for "which of these is the weaker claim". */
+export const GRADE_RANK: Record<EvidenceGrade, number> = {
+  manufacturer_documented: 5,
+  professionally_measured: 4,
+  community_corroborated: 3,
+  community_reported: 2,
+  estimated: 1,
+  unknown: 0,
+};
+
+export function weakestGrade(...gs: EvidenceGrade[]): EvidenceGrade {
+  let out: EvidenceGrade = 'manufacturer_documented';
+  for (const g of gs) if (GRADE_RANK[g] < GRADE_RANK[out]) out = g;
+  return out;
+}
 
 export const MeasurementMethod = z.enum([
   'factory_drawing', 'cad_model', 'cmm', 'laser_scan', 'calibrated_jig',
   'tape_measure', 'caliper', 'photogrammetry', 'derived', 'declared', 'unknown',
 ]);
 export type MeasurementMethod = z.infer<typeof MeasurementMethod>;
+
+/** Methods that are instrument-grade rather than hand-held. */
+export const PROFESSIONAL_METHODS: readonly MeasurementMethod[] = [
+  'cmm', 'laser_scan', 'calibrated_jig', 'cad_model', 'factory_drawing',
+];
+
+/**
+ * Typical repeatability of each method, as a half-width in mm. Used as the
+ * floor on a consensus tolerance: agreement between submissions can never
+ * claim a tighter figure than the instrument allows.
+ */
+export const METHOD_TOLERANCE_MM: Record<MeasurementMethod, number> = {
+  factory_drawing: 0.5, cad_model: 0.5, cmm: 0.5, laser_scan: 1,
+  calibrated_jig: 1.5, caliper: 1, tape_measure: 3,
+  photogrammetry: 5, derived: 10, declared: 0, unknown: 25,
+};
 
 /**
  * A single scalar dimension with its provenance. `toleranceMm` is the

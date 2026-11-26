@@ -1,8 +1,9 @@
 'use client';
 import dynamic from 'next/dynamic';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useBuild } from '@/store/build';
+import { useSubmissions } from '@/store/submissions';
 import { VehiclePanel } from '@/components/studio/VehiclePanel';
 import { WheelPanel } from '@/components/studio/WheelPanel';
 import { ResultsBar } from '@/components/studio/ResultsBar';
@@ -28,8 +29,17 @@ type RightTab = 'wheel' | 'measure' | 'brief' | 'saved';
 
 export default function StudioPage() {
   const s = useBuild();
+  const hydrateSubmissions = useSubmissions(st => st.hydrate);
   const [tab, setTab] = useState<RightTab>('wheel');
   const [optimizerOpen, setOptimizerOpen] = useState(false);
+
+  /*
+   * The studio consumes contributed measurements, so it has to load them.
+   * Only the contribute and review pages did this before, which meant the
+   * studio read an empty store and reported NO DATA for every variant even
+   * when accepted submissions were sitting in storage.
+   */
+  useEffect(() => { hydrateSubmissions(); }, [hydrateSubmissions]);
 
   return (
     <div className="h-screen flex flex-col overflow-hidden">
@@ -45,6 +55,11 @@ export default function StudioPage() {
             <div className="font-mono text-[11px] font-bold tracking-[0.16em] text-bone">RAREFORM</div>
             <div className="font-mono text-[8.5px] tracking-[0.12em] text-bone-mute">FITMENT LAB</div>
           </div>
+        </Link>
+
+        <Link href="/contribute"
+          className="font-mono text-[9.5px] font-semibold px-2 py-1.5 rounded border border-line text-bone-dim tracking-wider">
+          CONTRIBUTE
         </Link>
 
         <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">

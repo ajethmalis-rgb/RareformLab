@@ -1,7 +1,7 @@
 import { round, camberX, inToMm } from './units';
 import {
   type Dimension, type EvidenceGrade, type ClearanceVerdict,
-  type ArchModification, isKnown, isVerified,
+  type ArchModification, isKnown, isVerified, weakestGrade,
 } from './types';
 import type { WheelGeometry } from './wheel';
 import { assemblyHalfWidth, widestPoint, type MountedTire } from './tire';
@@ -148,15 +148,9 @@ const SEVERITY: Record<ClearanceVerdict, number> = {
 const worse = (a: ClearanceVerdict, b: ClearanceVerdict): ClearanceVerdict =>
   SEVERITY[b] > SEVERITY[a] ? b : a;
 
-const GRADE_RANK: Record<EvidenceGrade, number> = {
-  manufacturer_documented: 4, professionally_measured: 3,
-  community_reported: 2, estimated: 1, unknown: 0,
-};
-function worstGrade(...gs: EvidenceGrade[]): EvidenceGrade {
-  let out: EvidenceGrade = 'manufacturer_documented';
-  for (const g of gs) if (GRADE_RANK[g] < GRADE_RANK[out]) out = g;
-  return out;
-}
+// Grade ordering lives in types.ts so the solver and the aggregator can
+// never drift apart on which claim is the weaker one.
+const worstGrade = weakestGrade;
 
 /** Arithmetic verdict from a distance and a threshold. */
 function modelled(distanceMm: number, thresholdMm: number): ClearanceVerdict {
