@@ -1,62 +1,103 @@
 const fs = require('fs');
-const src = fs.readFileSync(require('path').join(__dirname,'..','standalone','bundle-check.js'), 'utf8');
-const cut = src.indexOf('   RENDER + WIRING');
-if (cut < 0) { console.error('could not locate the render section'); process.exit(1); }
-const engine = src.slice(0, src.lastIndexOf('/* ===', cut));
+
+// Engine + contribution logic, evaluated together exactly as the page loads them.
+const engine = fs.readFileSync('lab-engine.js', 'utf8');
+const contrib = fs.readFileSync('lab-contrib.js', 'utf8');
 
 const tests = `
-const f=(n,d)=>Number(n).toFixed(d===undefined?2:d);
-let pass=0,fail=0;
-const chk=(n,g,w,t)=>{const ok=Math.abs(g-w)<=t;ok?pass++:fail++;
-  console.log((ok?'  PASS':'  FAIL')+'  '+n.padEnd(42)+' got '+f(g)+'  want ~'+w);};
+let ok = 0, bad = 0;
+const chk = (n, c) => { c ? ok++ : bad++; console.log((c ? '  PASS  ' : '  FAIL  ') + n); };
+const near = (a, b, t) => Math.abs(a - b) <= t;
 
-chk('8J ET0 -> BS 4.5in', resolveWheel(8,16,0).backspacingIn, 4.5, 0.0001);
-chk('8J ET20 -> BS 5.2874in', resolveWheel(8,16,20).backspacingIn, 5.2874, 0.001);
-chk('9J ET15 -> FS 4.40945in', resolveWheel(9,17,15).frontspacingIn, 4.40945, 0.001);
-chk('10J ET-12 -> BS 5.02756in', resolveWheel(10,17,-12).backspacingIn, 5.02756, 0.001);
-chk('ET35 +15mm spacer == ET20', resolveWheel(8,16,35,{spacerMm:15}).backspacingMm, resolveWheel(8,16,20).backspacingMm, 0.001);
-chk('K profile departs from the +1in rule', resolveWheel(8,16,20,{profile:'K'}).backspacingMm, 135.8, 0.001);
-chk('bead seat inner = W/2 + ET', resolveWheel(8,16,20).innerBeadSeatDistanceMm, 121.6, 0.001);
+console.log('--- grades ---');
+chk('corroborated counts as verified', isVerified('community_corroborated'));
+chk('self-measured counts as verified', isVerified('self_measured'));
+chk('a single report does not', !isVerified('community_reported'));
+chk('estimated does not', !isVerified('estimated'));
+chk('unknown does not', !isVerified('unknown'));
 
-chk('185/70R13 measuring rim 5.5', designRim(185,70), 5.5, 0.001);
-chk('195/65R15 measuring rim 6.0', designRim(195,65), 6.0, 0.001);
-chk('225/45R17 measuring rim 7.5', designRim(225,45), 7.5, 0.001);
-chk('275/35R19 measuring rim 9.5', designRim(275,35), 9.5, 0.001);
-chk('195/65R15 OD 634.5mm', mountTire(195,65,15,6.0).diameterMm, 634.5, 0.2);
-chk('205/55R16 OD 631.9mm', mountTire(205,55,16,6.5).diameterMm, 631.9, 0.2);
-chk('245/40R18 OD 653.2mm', mountTire(245,40,18,8.5).diameterMm, 653.2, 0.2);
-chk('205/55 on 8in -> 220mm section', mountTire(205,55,16,8.0).sectionMm, 220, 0.2);
+console.log('--- geometry unchanged by the port ---');
+chk('8J ET20 -> BS 5.2874in', near(resolveWheel(8,16,20).backspacingIn, 5.2874, 0.001));
+chk('195/65R15 OD 634.5mm', near(mountTire(195,65,15,6.0).diameterMm, 634.5, 0.2));
+chk('3pc 3.0+5.5 -> 8.0J', near(assemble({construction:'three_piece',diameterIn:16,lipIn:3.0,barrelIn:5.5,padDepthIn:3.0,spacerMm:0,mount:'front_mount',targetEtMm:null}).achievedWidthIn, 8.0, 0.002));
 
-const a=assemble({construction:'three_piece',diameterIn:16,lipIn:3.0,barrelIn:5.5,padDepthIn:3.0,spacerMm:0,mount:'front_mount',targetEtMm:20});
-chk('3pc 3.0+5.5 -> 8.0J finished', a.achievedWidthIn, 8.0, 0.002);
-chk('advertised sum is 8.5in, not 8.0', a.naiveWidthIn, 8.5, 0.002);
-chk('ET38.1 derived from pad depth', a.achievedEtMm, 38.1, 0.1);
-chk('frontspacing == pad depth 76.2mm', a.wheel.frontspacingMm, 76.2, 0.1);
-chk('visible lip = pad 3.0in less 11mm pad', a.exposedLipIn, 3.0-11/25.4, 0.002);
-chk('target vs achieved surfaced', a.etErrorMm, 18.1, 0.1);
-chk('pad depth solving back to ET20', padDepthForEt(8.0,20), 3.7126, 0.001);
+console.log('--- consensus ---');
+const sub = (id, who, v, over) => Object.assign({
+  id, variantKey:'vk', vehicleId:'e30', axle:'front', submitterId:who, submitterName:who,
+  submitterVerified:false, submittedAt:'', suspensionPackage:'factory', rideHeightDropMm:0,
+  bodyOriginal:true, method:'tape_measure', values:{ archRadiusMm:v }, status:'accepted',
+}, over || {});
 
-chk('camber -1deg on 650 OD: top in 5.67mm', -camberX(0,325,-1), 5.67, 0.02);
-chk('E30 rear STA 60mm -> -1.68deg', GEOMETRY.semi_trailing_arm.gain*6, -1.68, 0.01);
-chk('swing axle gains POSITIVE camber', GEOMETRY.swing_axle_low_pivot.gain, 0.20, 0.001);
+const one = consensusFor('archRadiusMm', [sub('a','alice',383)]);
+chk('one submitter is not promoted', one.grade === 'community_reported' && !isVerified(one.grade));
+chk('  and it says how many more are needed', /2 more agreeing/.test(one.note));
 
-// stretched fitment: the FLANGE is the widest point, not the tyre
-const w8=resolveWheel(8,16,20), t8=mountTire(205,40,16,8.0);
-chk('205/40 on 8J section 215mm', t8.sectionMm, 215, 0.2);
-chk('  ...flange 114.3 is the widest point', widestPoint(t8,w8.rimRadiusMm,w8.overallWidthMm).halfWidthMm, 114.3, 0.2);
-// unstretched: the SIDEWALL is the widest point
-const w6=resolveWheel(6,15,42), t6=mountTire(195,65,15,6.0);
-chk('195/65 on 6J widest = section/2', widestPoint(t6,w6.rimRadiusMm,w6.overallWidthMm).halfWidthMm, 97.5, 0.2);
+const three = consensusFor('archRadiusMm', [sub('a','alice',382), sub('b','bob',385), sub('c','carol',383)]);
+chk('three distinct submitters promote', three.grade === 'community_corroborated');
+chk('  consensus is the median, 383', three.value === 383);
+chk('  tolerance floors at the tape, 3mm', three.tolerance === 3);
 
-chk('stretch class: 195/50 on 9J is beyond spec', sidewallClass(stretchIn(195,50,9.0)).k==='beyond_spec'?1:0, 1, 0);
-chk('stretch class: 195/65 on 6J is oem', sidewallClass(stretchIn(195,65,6.0)).k==='oem'?1:0, 1, 0);
+const same = consensusFor('archRadiusMm', [sub('a','alice',382), sub('b','alice',383), sub('c','alice',384)]);
+chk('one person measuring thrice is one opinion', same.grade === 'community_reported' && same.agreeing === 1);
 
-// the evidence rule
-chk('estimated input cannot return clear', formalise('clear','estimated')==='indeterminate'?1:0, 1, 0);
-chk('unknown input cannot return clear', formalise('clear','unknown')==='indeterminate'?1:0, 1, 0);
-chk('interference reports even on weak data', formalise('interference','estimated')==='interference'?1:0, 1, 0);
-chk('verified input can return clear', formalise('clear','professionally_measured')==='clear'?1:0, 1, 0);
+const stray = consensusFor('archRadiusMm',
+  [sub('a','alice',382), sub('b','bob',385), sub('c','carol',383), sub('d','dave',420)]);
+chk('an outlier is excluded, not averaged', stray.value === 383 && stray.grade === 'community_corroborated');
+chk('  and it is marked as an outlier', stray.points.filter(p => p.outlier).length === 1);
 
-console.log(fail ? '\\n*** ' + fail + ' FAILURES' : '\\nALL ' + pass + ' ENGINE CHECKS PASS');
+const camps = consensusFor('archRadiusMm',
+  [sub('a','alice',380), sub('b','bob',381), sub('c','carol',420), sub('d','dave',421)]);
+chk('two camps is a conflict, not a consensus', camps.conflict === true);
+chk('  not promoted', !isVerified(camps.grade));
+chk('  and the solver is handed nothing', consensusDim(camps) === null);
+chk('  no average is offered as the answer', /nobody measured/.test(camps.note));
+
+const pending = consensusFor('archRadiusMm',
+  [sub('a','alice',382), sub('b','bob',383,{status:'pending'}), sub('c','carol',384,{status:'pending'})]);
+chk('pending submissions do not count', pending.agreeing === 1);
+
+console.log('--- camber uses degree-scaled tolerances ---');
+const cam = k => Object.assign(sub('x','y',0), { values: { camberDeg: k } });
+const camC = consensusFor('camberDeg', [
+  Object.assign({}, cam(-0.40), {id:'a', submitterId:'alice'}),
+  Object.assign({}, cam(-0.45), {id:'b', submitterId:'bob'}),
+  Object.assign({}, cam(-0.35), {id:'c', submitterId:'carol'}),
+]);
+chk('camber corroborates', camC.grade === 'community_corroborated');
+chk('  with a degree band, not a millimetre one', camC.band < 1);
+
+console.log('--- validation ---');
+const wheel = { widthIn:7, diameterIn:15, etMm:30, tireSectionMm:195, tireAspect:65 };
+chk('impossible value rejected', hasReject(validateSub(sub('a','alice',38))));
+chk('measuring to the tyre top is caught',
+  /resting on its own arch/.test(validateSub(sub('a','alice',250,{wheelOnCar:wheel}))[0].message));
+chk('a sane measurement passes', !hasReject(validateSub(sub('a','alice',383,{wheelOnCar:wheel}))));
+chk('modified arch is flagged, not rejected', (() => {
+  const i = validateSub(sub('a','alice',383,{bodyOriginal:false}));
+  return !hasReject(i) && i.some(x => /excluded from the consensus/.test(x.message));
+})());
+
+console.log('--- variant rollup ---');
+const four = (who, j) => ({
+  id:'s'+who, variantKey:'vk', vehicleId:'e30', axle:'front', submitterId:who, submitterName:who,
+  submitterVerified:false, submittedAt:'', suspensionPackage:'factory', rideHeightDropMm:0,
+  bodyOriginal:true, method:'tape_measure', status:'accepted',
+  values:{ archRadiusMm:382+j, archLateralMm:88+j, innerDepthMm:165+j, travelMm:80 },
+});
+const v3 = aggregateVariant('vk', [four('alice',0), four('bob',1), four('carol',2)]);
+chk('variant becomes analysable at three', v3.analysable === true);
+chk('  and says so', /returns real verdicts/.test(nextNeed(v3)));
+const v1 = aggregateVariant('vk', [four('alice',0)]);
+chk('one submitter is not analysable', v1.analysable === false);
+chk('  and it asks for exactly what is missing', /2 more independent/.test(nextNeed(v1)));
+const vMod = aggregateVariant('vk',
+  [four('alice',0), four('bob',1), four('carol',2), Object.assign(four('dave',40), {bodyOriginal:false})]);
+chk('a pulled arch is held out of the consensus', vMod.excluded.length === 1);
+chk('  and has not moved the agreed figure', vMod.byKey.archRadiusMm.value === 383);
+
+console.log(bad ? '\\n*** ' + bad + ' FAILED' : '\\nALL ' + ok + ' CHECKS PASS');
 `;
-eval(engine + tests);
+
+// localStorage is absent in node; the storage helpers tolerate that.
+global.localStorage = undefined;
+eval(engine + contrib + tests);

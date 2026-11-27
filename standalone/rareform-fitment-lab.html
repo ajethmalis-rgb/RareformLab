@@ -198,6 +198,26 @@ footer{margin-top:24px;padding-top:15px;border-top:1px solid var(--line);font-si
   line-height:1.6;color:var(--mute)}
 footer b{color:var(--fg2)}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* contribute / review */
+.pagehead{padding-block:20px 16px}
+.pagehead h2{margin:0;font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}
+.pagehead p{margin:7px 0 0;font-size:13px;line-height:1.6;color:var(--fg2);max-width:62ch}
+.cols2{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:16px;align-items:start}
+@media (max-width:1040px){.cols2{grid-template-columns:1fr}}
+.row5{display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));gap:9px}
+.mlist{display:flex;flex-direction:column;gap:0;margin-top:10px}
+.mfield{border-top:1px solid var(--line);padding-top:12px;margin-top:12px}
+.mfield:first-child{border-top:0;padding-top:0;margin-top:0}
+.mrow{display:flex;align-items:center;gap:8px}
+.munit{font-family:var(--mono);font-size:11px;color:var(--mute);width:22px;flex:0 0 auto}
+.mblock{border-top:1px solid var(--line);padding-top:13px;margin-top:13px}
+.mblock:first-of-type{border-top:0}
+.mblock svg{display:block;width:100%;height:auto;max-width:560px}
+.mhead{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;
+  margin-bottom:5px;font-size:12px;color:var(--fg)}
+.mhead .num{font-size:12px}
+#navseg button{padding:6px 11px}
 </style>
 
 <header class="top">
@@ -211,7 +231,12 @@ footer b{color:var(--fg2)}
     </svg>
     <div><h1>RAREFORM</h1><p>FITMENT LAB</p></div>
    </div>
-   <div class="seg" id="axleseg" role="group" aria-label="Axle" style="margin-left:auto;min-width:150px">
+   <div class="seg" id="navseg" role="group" aria-label="Section" style="margin-left:auto">
+    <button data-v="studio" aria-pressed="true">STUDIO</button>
+    <button data-v="contribute" aria-pressed="false">CONTRIBUTE</button>
+    <button data-v="review" aria-pressed="false">REVIEW</button>
+   </div>
+   <div class="seg" id="axleseg" role="group" aria-label="Axle" style="min-width:140px">
     <button data-v="front" aria-pressed="true">FRONT</button>
     <button data-v="rear" aria-pressed="false">REAR</button>
    </div>
@@ -220,6 +245,7 @@ footer b{color:var(--fg2)}
 </header>
 
 <div class="wrap">
+ <div id="page-studio">
  <div id="verdict" class="verdict v-gray">
   <div style="min-width:0">
    <div class="vhead" id="vhead"></div>
@@ -404,6 +430,11 @@ footer b{color:var(--fg2)}
   </div>
  </div>
 
+ </div><!-- /page-studio -->
+
+ <div id="page-contribute" hidden></div>
+ <div id="page-review" hidden></div>
+
  <footer>
   <b>What is exact and what is not.</b> Exact: offset, effective offset with spacers, backspacing and
   frontspacing from physical flange geometry, bead-seat positions, finished width from mating geometry
@@ -446,9 +477,38 @@ const r2 = (v, d) => { const f = 10 ** (d ?? 2); return Math.round(v * f) / f; }
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 
 /* ---- evidence grading. The reason this product can refuse to lie. ---- */
-const GRADE_RANK = { manufacturer_documented: 4, professionally_measured: 3, community_reported: 2, estimated: 1, unknown: 0 };
-const GRADE_LABEL = { manufacturer_documented: 'FACTORY DOC', professionally_measured: 'PRO MEASURED', community_reported: 'YOU MEASURED', estimated: 'ESTIMATED', unknown: 'NO DATA' };
-const GRADE_COLOR = { manufacturer_documented: 'var(--ok)', professionally_measured: 'var(--ok)', community_reported: 'var(--info)', estimated: 'var(--warn)', unknown: 'var(--gray)' };
+/*
+ * Evidence grading. The ranks decide one thing: whether a result may come
+ * back green. `isVerified` is the line, and three grades sit above it.
+ *
+ * `self_measured` is the one worth explaining. The other grades answer
+ * "how well is this VARIANT known", which is the right question for a
+ * shared library. But a person in the studio is asking about THEIR car,
+ * and for that question their own tape measurement is the best evidence
+ * that exists — better than a consensus of other people's cars. Grading it
+ * as a single community report, which is what the variant-level scheme
+ * would do, means somebody does the work of measuring and still gets
+ * UNKNOWN. That is a bug, not caution.
+ *
+ * It is deliberately NOT the same as corroborated: measuring your own car
+ * resolves your own verdict and promotes nothing for anyone else. The way
+ * it helps others is to contribute it.
+ */
+const GRADE_RANK = {
+  manufacturer_documented: 5, professionally_measured: 4,
+  self_measured: 3.5, community_corroborated: 3,
+  community_reported: 2, estimated: 1, unknown: 0,
+};
+const GRADE_LABEL = {
+  manufacturer_documented: 'FACTORY DOC', professionally_measured: 'PRO MEASURED',
+  self_measured: 'YOUR CAR', community_corroborated: 'CORROBORATED',
+  community_reported: 'SINGLE REPORT', estimated: 'ESTIMATED', unknown: 'NO DATA',
+};
+const GRADE_COLOR = {
+  manufacturer_documented: 'var(--ok)', professionally_measured: 'var(--ok)',
+  self_measured: 'var(--ok)', community_corroborated: 'var(--ok)',
+  community_reported: 'var(--info)', estimated: 'var(--warn)', unknown: 'var(--gray)',
+};
 const isVerified = g => GRADE_RANK[g] >= 3;
 const worstGrade = (...gs) => gs.reduce((a, b) => GRADE_RANK[b] < GRADE_RANK[a] ? b : a, 'manufacturer_documented');
 
@@ -585,12 +645,13 @@ const PACKAGE = {
 };
 const ARCH_GAIN = { untouched: 0, rolled: 8, rolled_and_pulled: 14 };
 
-function cornerState(arch, pkg, dropMm, compressionMm, camberOverride, travelOverride, bumpTravelMm) {
+function cornerState(arch, pkg, dropMm, compressionMm, camberOverride, travelOverride, bumpTravelMm, grades) {
+  grades = grades || {};
   const total = dropMm + compressionMm;
   let camberDeg, camberGrade, note;
   if (camberOverride !== null && camberOverride !== undefined && camberOverride !== '') {
     camberDeg = Number(camberOverride) + (GEOMETRY[arch].gain * compressionMm) / 10;
-    camberGrade = 'community_reported';
+    camberGrade = grades.camber || 'self_measured';
     note = 'Camber taken from your measurement. Change under compression still uses the architecture rate, not a measured curve.';
   } else {
     camberDeg = (GEOMETRY[arch].gain * total) / 10;
@@ -600,7 +661,7 @@ function cornerState(arch, pkg, dropMm, compressionMm, camberOverride, travelOve
   let remainingTravelMm, travelGrade;
   if (travelOverride !== null && travelOverride !== undefined && travelOverride !== '') {
     remainingTravelMm = Math.max(0, Number(travelOverride) - compressionMm);
-    travelGrade = 'community_reported';
+    travelGrade = grades.travel || 'self_measured';
   } else {
     // Lowering on stock-length hardware spends roughly 55% of the drop out of
     // available bump travel; the rest is the stop engaging earlier. Estimated.
@@ -888,6 +949,297 @@ function optimise(opts) {
 }
 
 /* ============================================================
+   CONTRIBUTION LOOP — ported from the tested TypeScript build.
+   Same thresholds, same rules. See the repo's aggregate.test.ts
+   and contribution-e2e.test.ts for the cases that pin these.
+
+   This is how a chassis stops being an estimate. One person with
+   a tape measure is a data point; three independent people
+   agreeing is evidence, and the engine treats it as such.
+   ============================================================ */
+
+const MEAS = {
+  archRadiusMm: {
+    label: 'Fender lip to hub centre, vertical', unit: 'mm', range: [200, 600], core: true,
+    how: 'Car on the ground at ride height, wheel on. Measure straight up from the centre of the wheel to the lowest point of the fender lip. Read it at the top of the arch, not at the front or rear of the opening.',
+    why: 'Decides whether the tyre can reach the lip at all. Above the tyre radius and the assembly sits inside the opening, where it cannot touch the lip however far out it sits.',
+  },
+  archLateralMm: {
+    label: 'Hub face to fender lip, lateral', unit: 'mm', range: [10, 260], core: true,
+    how: 'Wheel off. Lay a straight edge against the hub mounting face, square to it, and measure outboard to the fender lip. Use a rule and a square; this one cannot be eyeballed.',
+    why: 'Fixes where the lip sits across the car. Every poke, tuck and arch clearance figure is measured from it.',
+  },
+  innerDepthMm: {
+    label: 'Hub face to nearest inner obstruction', unit: 'mm', range: [60, 320], core: true,
+    how: 'Wheel off, from the same mounting face, measure inboard to the closest point of the strut body, spring, perch or arm, at roughly tyre-shoulder height.',
+    why: 'Sets the inboard limit. More offset moves the assembly toward it, less offset away.',
+  },
+  travelMm: {
+    label: 'Hub travel remaining to the bump stop', unit: 'mm', range: [0, 180], core: true,
+    how: 'Jack the body until the suspension is at full compression on the stop, or measure the gap to the stop and add the stop’s own crush. Record the vertical distance the hub still has to rise.',
+    why: 'This is what static-only calculators ignore. Most rubbing happens at the stop, not at rest.',
+  },
+  camberDeg: {
+    label: 'Camber at this ride height', unit: '°', range: [-8, 5], core: false, scale: 0.08,
+    how: 'A digital gauge on the wheel face at ride height, or a plumb line and rule against the rim flange. Negative when the top leans in.',
+    why: 'Decides where the tyre shoulder actually sits against the arch. Without it the model falls back to a rule of thumb for the suspension type, and no arch result can be better than estimated.',
+  },
+  wellCeilingMm: {
+    label: 'Hub centre to top of the wheel well', unit: 'mm', range: [250, 800], core: false,
+    how: 'From the hub centre straight up to the highest point of the inner wheel housing. Optional, but it is the real vertical ceiling.',
+    why: 'The tyre tucks up into the well above the lip, so this is the vertical limit rather than the arch.',
+  },
+};
+const MEAS_KEYS = Object.keys(MEAS);
+const CORE_KEYS = MEAS_KEYS.filter(k => MEAS[k].core);
+
+/** Typical repeatability of each method, mm. Scaled per key for non-mm units. */
+const METHOD_TOL = {
+  tape_measure: 3, caliper: 1, calibrated_jig: 1.5,
+  laser_scan: 1, cmm: 0.5, photogrammetry: 5,
+};
+const METHOD_LABEL = {
+  tape_measure: 'Tape measure or steel rule', caliper: 'Caliper',
+  calibrated_jig: 'Calibrated jig', laser_scan: 'Laser scan', cmm: 'CMM',
+  photogrammetry: 'Photogrammetry, with a calibration reference in frame',
+};
+const PRO_METHODS = ['cmm', 'laser_scan', 'calibrated_jig'];
+const tolFor = (method, key) =>
+  (METHOD_TOL[method] || 25) * ((key && MEAS[key] && MEAS[key].scale) || 1);
+
+/* ---- thresholds. Identical to the TypeScript build. ---- */
+const MIN_CORROBORATION = 3;
+const AGREEMENT_FACTOR = 3;
+const AGREEMENT_FLOOR_MM = 5;
+
+const vkey = (vehicleId, axle, pkg) => [vehicleId, axle, pkg, 'factory'].join('|');
+
+/* ---- robust statistics. Median and MAD, never mean and SD: with four
+   hand measurements one transposed digit destroys a mean and barely
+   moves a median. ---- */
+function med(xs) {
+  if (!xs.length) return NaN;
+  const s = [...xs].sort((a, b) => a - b), m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+function madOf(xs) {
+  if (!xs.length) return NaN;
+  const m = med(xs);
+  return med(xs.map(x => Math.abs(x - m)));
+}
+
+/* ---- validation, before a reviewer ever sees it ---- */
+function validateSub(sub) {
+  const issues = [];
+  for (const k of Object.keys(sub.values)) {
+    const v = sub.values[k], def = MEAS[k];
+    if (!def) continue;
+    if (!isFinite(v)) { issues.push({ key: k, severity: 'reject', message: 'Not a number.' }); continue; }
+    if (v < def.range[0] || v > def.range[1])
+      issues.push({ key: k, severity: 'reject',
+        message: v + ' ' + def.unit + ' is outside the possible range ' + def.range[0] + ' to ' + def.range[1] + '. Check the units and the datum.' });
+  }
+  const w = sub.wheelOnCar;
+  if (w) {
+    const tyreR = (w.diameterIn * 25.4) / 2 + (w.tireSectionMm * w.tireAspect) / 100;
+    const a = sub.values.archRadiusMm;
+    if (isFinite(a)) {
+      if (a < tyreR) issues.push({ key: 'archRadiusMm', severity: 'reject',
+        message: 'Lip-to-hub of ' + Math.round(a) + ' mm is less than the fitted tyre’s radius of ' + Math.round(tyreR) + ' mm. The car would be resting on its own arch. This is almost always a measurement taken to the top of the tyre rather than to the hub centre.' });
+      else if (a - tyreR > 160) issues.push({ key: 'archRadiusMm', severity: 'flag',
+        message: 'Implies a ' + Math.round(a - tyreR) + ' mm arch gap, which is unusually large. Worth confirming.' });
+    }
+  }
+  if (!sub.bodyOriginal) issues.push({ key: 'submission', severity: 'flag',
+    message: 'Arch is not original. Kept on record and shown, but excluded from the consensus because it describes this car rather than the model.' });
+  if (sub.method === 'photogrammetry') issues.push({ key: 'submission', severity: 'flag',
+    message: 'Photogrammetry is admissible only with a calibration reference in frame. Confirm one was used.' });
+  return issues;
+}
+const hasReject = issues => issues.some(i => i.severity === 'reject');
+
+/* ---- consensus ---- */
+function consensusFor(key, subs) {
+  const def = MEAS[key];
+  const usable = subs.filter(s => s.status === 'accepted' && isFinite(s.values[key]));
+  if (!usable.length) return {
+    key, label: def.label, unit: def.unit, value: NaN, tolerance: NaN, grade: 'unknown',
+    points: [], distinct: 0, agreeing: 0, band: NaN, conflict: false,
+    needsMore: MIN_CORROBORATION, note: 'No accepted submission carries this measurement yet.',
+  };
+
+  const values = usable.map(s => s.values[key]);
+  const m = med(values), spread = madOf(values);
+  const worstTol = Math.max(...usable.map(s => tolFor(s.method, key)));
+  const unitScale = (def.scale || 1);
+  const band = Math.max(AGREEMENT_FACTOR * worstTol, AGREEMENT_FLOOR_MM * unitScale);
+
+  /* Scatter test, and it must come BEFORE the outlier test. A MAD-derived
+     threshold grows with the spread, so four submissions at 380, 381, 420,
+     421 give a MAD of 20, a threshold of 60, and therefore no outliers at
+     all — the arithmetic would report a corroborated 400.5 mm that nobody
+     measured, sitting between two real clusters. When the scatter exceeds
+     what the instrument explains, that is a disagreement about the variant,
+     not noise, and no further arithmetic should resolve it. */
+  const scattered = spread > band;
+  const threshold = Math.max(3 * spread, band);
+
+  const points = usable.map(s => {
+    const v = s.values[key], dev = Math.abs(v - m);
+    return { id: s.id, who: s.submitterId, name: s.submitterName || s.submitterId,
+      value: v, method: s.method, outlier: dev > threshold, dev: r2(dev, 2) };
+  });
+  const inliers = points.filter(p => !p.outlier);
+  const outliers = points.filter(p => p.outlier);
+  const distinct = new Set(points.map(p => p.who)).size;
+  const agreeing = new Set(inliers.map(p => p.who)).size;
+  const conflict = scattered || (outliers.length > 0 && outliers.length >= inliers.length);
+
+  const iv = inliers.map(p => p.value);
+  const value = iv.length ? med(iv) : m;
+  const iSpread = iv.length > 1 ? (Math.max(...iv) - Math.min(...iv)) / 2 : 0;
+  const bestTol = Math.min(...(inliers.length ? inliers : points).map(p => tolFor(p.method, key)));
+  const tolerance = Math.max(bestTol, iSpread);
+
+  const hasPro = (inliers.length ? inliers : points).some(p => {
+    const s = usable.find(x => x.id === p.id);
+    return PRO_METHODS.indexOf(p.method) >= 0 && s && s.submitterVerified;
+  });
+
+  let grade, note;
+  if (conflict) {
+    grade = 'community_reported';
+    note = scattered
+      ? 'Submissions are scattered across ' + r2(Math.max(...values) - Math.min(...values), 1) + ' ' + def.unit
+        + ', far beyond the ' + r2(band, 1) + ' ' + def.unit + ' the instrument explains. That is a disagreement about what this variant is, not measurement noise. Not promoted, and no average is reported as the answer — the midpoint of two camps is a figure nobody measured.'
+      : 'Submissions disagree: ' + inliers.length + ' cluster around ' + r2(value, 1) + ' ' + def.unit
+        + ' and ' + outliers.length + ' sit outside the band. Not promoted — a person has to decide which describes the variant.';
+  } else if (hasPro) {
+    grade = 'professionally_measured';
+    note = 'Instrument measurement from a verified submitter' + (agreeing > 1 ? ', corroborated by ' + (agreeing - 1) + ' more' : '') + '.';
+  } else if (agreeing >= MIN_CORROBORATION) {
+    grade = 'community_corroborated';
+    note = agreeing + ' independent submitters agree within ' + r2(tolerance, 2) + ' ' + def.unit
+      + (outliers.length ? '; ' + outliers.length + ' outlier excluded' : '') + '.';
+  } else {
+    grade = 'community_reported';
+    const need = MIN_CORROBORATION - agreeing;
+    note = agreeing + ' submitter' + (agreeing === 1 ? '' : 's') + ' so far. ' + need + ' more agreeing measurement'
+      + (need === 1 ? '' : 's') + ' promotes this to corroborated, which is what lets the engine return a pass on it.';
+  }
+
+  return { key, label: def.label, unit: def.unit, value: r2(value, 2), tolerance: r2(tolerance, 2),
+    grade, points, distinct, agreeing, band: r2(band, 2), conflict,
+    needsMore: Math.max(0, MIN_CORROBORATION - agreeing), note };
+}
+
+const GRADE_ORDER = { manufacturer_documented: 5, professionally_measured: 4,
+  community_corroborated: 3, community_reported: 2, estimated: 1, unknown: 0 };
+
+function aggregateVariant(variantKey, subs) {
+  const mine = subs.filter(s => s.variantKey === variantKey);
+  const excluded = [];
+  const eligible = mine.filter(s => {
+    if (!s.bodyOriginal) {
+      excluded.push({ id: s.id, reason: 'Arch is not original, so this describes the car rather than the model.' });
+      return false;
+    }
+    return true;
+  });
+  const byKey = {};
+  for (const k of MEAS_KEYS) byKey[k] = consensusFor(k, eligible);
+  const weakest = CORE_KEYS.map(k => byKey[k].grade)
+    .reduce((a, g) => GRADE_ORDER[g] < GRADE_ORDER[a] ? g : a, 'manufacturer_documented');
+  return {
+    variantKey, byKey, excluded,
+    coreComplete: CORE_KEYS.every(k => isFinite(byKey[k].value)),
+    analysable: GRADE_ORDER[weakest] >= GRADE_ORDER.community_corroborated,
+    weakestCoreGrade: weakest,
+    pending: mine.filter(s => s.status === 'pending').length,
+    total: mine.length,
+  };
+}
+
+/** What this variant needs next, phrased as a request rather than a status. */
+function nextNeed(v) {
+  const missing = CORE_KEYS.filter(k => !isFinite(v.byKey[k].value));
+  if (missing.length)
+    return 'Needs a first measurement of: ' + missing.map(k => MEAS[k].label.toLowerCase()).join(', ') + '.';
+  const conflicted = CORE_KEYS.filter(k => v.byKey[k].conflict);
+  if (conflicted.length)
+    return 'Submissions disagree on ' + conflicted.map(k => MEAS[k].label.toLowerCase()).join(' and ')
+      + '. Someone has to resolve that before this variant can be promoted.';
+  const short = CORE_KEYS.map(k => ({ k, c: v.byKey[k] })).filter(x => x.c.needsMore > 0)
+    .sort((a, b) => b.c.needsMore - a.c.needsMore);
+  if (short.length) {
+    const w = short[0];
+    return w.c.needsMore + ' more independent measurement' + (w.c.needsMore === 1 ? '' : 's')
+      + ' of ' + MEAS[w.k].label.toLowerCase() + ' promotes this variant to corroborated.';
+  }
+  return 'All four core measurements are corroborated. This variant returns real verdicts.';
+}
+
+/** A conflicted consensus hands the solver nothing; its median is for a human only. */
+function consensusDim(c) {
+  if (!c || !isFinite(c.value) || c.conflict) return null;
+  return { known: true, value: c.value, grade: c.grade, tolerance: c.tolerance };
+}
+
+/* ---- storage ---- */
+const SUB_KEY = 'rareform.submissions.v1';
+const SUBS = { list: [], loaded: false };
+
+function loadSubs() {
+  if (SUBS.loaded) return SUBS.list;
+  SUBS.loaded = true;
+  try {
+    const raw = localStorage.getItem(SUB_KEY);
+    if (raw) SUBS.list = JSON.parse(raw).filter(s => s && s.id && s.variantKey && s.values);
+  } catch (e) { /* private window or blocked storage */ }
+  return SUBS.list;
+}
+function saveSubs() {
+  try { localStorage.setItem(SUB_KEY, JSON.stringify(SUBS.list)); } catch (e) {}
+}
+function addSub(sub) {
+  const issues = validateSub(sub);
+  if (hasReject(issues)) return { ok: false, issues };
+  SUBS.list = [sub, ...SUBS.list];
+  saveSubs();
+  return { ok: true, issues };
+}
+function setSubStatus(id, status) {
+  SUBS.list = SUBS.list.map(s => s.id === id ? { ...s, status } : s);
+  saveSubs();
+}
+
+/**
+ * Example records, seeded PENDING on purpose. An accepted example would
+ * reach consensus on its own and quietly promote a real chassis to a green
+ * verdict off invented numbers, which is the exact failure this product
+ * exists to prevent. A person has to accept them, and they are labelled.
+ */
+function seedExamples() {
+  loadSubs();
+  if (SUBS.list.some(s => s.id.indexOf('example-') === 0)) return;
+  const vk = vkey('e30', 'front', 'factory');
+  const mk = (n, who, j) => ({
+    id: 'example-' + n, variantKey: vk, vehicleId: 'e30', axle: 'front',
+    submitterId: who, submitterName: who, submitterVerified: false,
+    submittedAt: new Date().toISOString(),
+    suspensionPackage: 'factory', rideHeightDropMm: 0,
+    bodyOriginal: true, method: 'tape_measure',
+    wheelOnCar: { widthIn: 6, diameterIn: 14, etMm: 42, tireSectionMm: 195, tireAspect: 65 },
+    values: { archRadiusMm: 382 + j, archLateralMm: 88 + j, innerDepthMm: 165 + j,
+      travelMm: 80, camberDeg: r2(-0.4 + j * 0.05, 2) },
+    notes: 'EXAMPLE RECORD — illustrative numbers, not measured from a car.',
+    status: 'pending',
+  });
+  SUBS.list = [mk(1, 'example-owner-a', 0), mk(2, 'example-owner-b', 2), mk(3, 'example-owner-c', 1), ...SUBS.list];
+  saveSubs();
+}
+
+/* ============================================================
    VEHICLE LIBRARY
 
    Entries with a factory package get an ESTIMATED envelope, anchored so
@@ -1012,6 +1364,7 @@ const FINISHES = [
    STATE
    ============================================================ */
 const S = {
+  page: 'studio',
   vehicleId: 'e30',
   axle: 'front',
   pkg: 'factory',
@@ -1059,16 +1412,34 @@ function envelope(axle) {
       iD = { known:true, grade:'estimated', value: inner };
     }
   }
-  // user measurements win, and are traced as such
-  if (m.arch !== '')  aR = { known:true, grade:'community_reported', value:Number(m.arch) };
-  if (m.lip !== '')   aL = { known:true, grade:'community_reported', value:Number(m.lip) };
-  if (m.inner !== '') iD = { known:true, grade:'community_reported', value:Number(m.inner) };
+  /*
+   * Evidence layers, weakest first. Each one that exists replaces the one
+   * below it, so a partly measured corner improves rather than regressing.
+   *   1. the chassis preset          estimated
+   *   2. the community consensus     corroborated, once three people agree
+   *   3. your own measurement        self-measured, best for YOUR car
+   */
+  const cons = aggregateVariant(vkey(v.id, axle, S.pkg), loadSubs());
+  const cd = k => consensusDim(cons.byKey[k]);
+  const fromConsensus = (cur, k) => {
+    const d = cd(k);
+    return d ? { known: true, grade: d.grade, value: d.value } : cur;
+  };
+  aR = fromConsensus(aR, 'archRadiusMm');
+  aL = fromConsensus(aL, 'archLateralMm');
+  iD = fromConsensus(iD, 'innerDepthMm');
+  wC = fromConsensus(wC, 'wellCeilingMm');
+
+  // your own measurement of your own car beats any consensus of other cars
+  if (m.arch !== '')  aR = { known:true, grade:'self_measured', value:Number(m.arch) };
+  if (m.lip !== '')   aL = { known:true, grade:'self_measured', value:Number(m.lip) };
+  if (m.inner !== '') iD = { known:true, grade:'self_measured', value:Number(m.inner) };
 
   return {
     architecture: arch, innerLabel: label, bumpTravelMm: bump,
     archRadius: aR, archLateral: aL, wellCeiling: wC, innerDepth: iD,
     centreBoreMm: v.bore, hubSpigotDia: null,
-    baselinePkg: pk,
+    baselinePkg: pk, consensus: cons,
   };
 }
 
@@ -1086,7 +1457,18 @@ function derive(axle) {
     padDepthIn: c.pad, spacerMm: c.spacer, mount: c.mount, targetEtMm: c.targetEt,
   });
   const tire = mountTire(c.sec, c.asp, c.d, asm.achievedWidthIn);
-  const st = cornerState(env.architecture, S.pkg, drop, 0, camberOv, m.trav, env.bumpTravelMm);
+  // camber and travel follow the same evidence ladder as the envelope
+  const camberC = consensusDim(env.consensus.byKey.camberDeg);
+  const travelC = consensusDim(env.consensus.byKey.travelMm);
+  const camberVal = camberOv !== '' ? camberOv : (camberC ? camberC.value : '');
+  const travelVal = m.trav !== '' ? m.trav : (travelC ? travelC.value : '');
+  const st = cornerState(
+    env.architecture, S.pkg, drop, 0, camberVal, travelVal, env.bumpTravelMm,
+    {
+      camber: camberOv !== '' ? 'self_measured' : (camberC ? camberC.grade : undefined),
+      travel: m.trav !== '' ? 'self_measured' : (travelC ? travelC.grade : undefined),
+    },
+  );
   const cl = analyse(env, asm.wheel, tire, st, S.archMod);
 
   let baseWheel = null, baseTire = null, delta = null;
@@ -1889,14 +2271,17 @@ function runOptimiser() {
 }
 
 /* ---- wiring ---- */
-function persist() { try { localStorage.setItem('rareform.v1', JSON.stringify(S)); } catch (e) { /* private window or blocked storage */ } }
-function renderAll() { renderControls(); renderOutput(); persist(); }
+function renderAll() { renderControls(); renderOutput(); }
 
 function bindSeg(id, fn) {
   [...$(id).querySelectorAll('button')].forEach(b => b.onclick = () => { fn(b.dataset.v); renderAll(); });
 }
 
 function init() {
+  loadSubs();
+  seedExamples();
+  [...document.querySelectorAll('#navseg button')].forEach(b =>
+    b.onclick = () => { S.page = b.dataset.v; renderPage(); });
   $('vehsel').onchange = e => { S.vehicleId = e.target.value; renderAll(); };
   $('pkgsel').onchange = e => { S.pkg = e.target.value; renderAll(); };
   $('dropF').oninput = e => { S.dropF = Number(e.target.value); renderAll(); };
@@ -1982,7 +2367,11 @@ function init() {
     const raw = localStorage.getItem('rareform.v1');
     if (raw) Object.assign(S, JSON.parse(raw));
   } catch (e) { /* private window or blocked storage: carry on */ }
-  renderAll();
+  const persist = () => { try { localStorage.setItem('rareform.v1', JSON.stringify(S)); } catch (e) {} };
+  const origRender = renderAll;
+  window.renderAll = function () { origRender(); persist(); };
+
+  renderPage();
 }
 
 let toastT;
@@ -1995,5 +2384,344 @@ function toast(msg) {
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
 else init();
+
+/* ============================================================
+   CONTRIBUTE + REVIEW VIEWS
+   ============================================================ */
+
+const CONTRIB = {
+  vehicleId: 'e30', axle: 'front', pkg: 'factory', drop: 0,
+  bodyOriginal: true, method: 'tape_measure', name: '',
+  wheel: { widthIn: '', diameterIn: '', etMm: '', tireSectionMm: '', tireAspect: '' },
+  values: {}, notes: '', justSubmitted: null,
+};
+let REVIEW_TAB = 'queue';
+
+function contribVariantKey() {
+  return vkey(CONTRIB.vehicleId, CONTRIB.axle, CONTRIB.pkg);
+}
+
+function draftSubmission() {
+  const vals = {};
+  for (const k of Object.keys(CONTRIB.values)) {
+    const raw = CONTRIB.values[k];
+    if (raw === '' || raw === undefined) continue;
+    const n = Number(raw);
+    if (isFinite(n)) vals[k] = n;
+  }
+  if (!Object.keys(vals).length) return null;
+  const w = CONTRIB.wheel;
+  const haveWheel = Object.keys(w).every(k => w[k] !== '' && isFinite(Number(w[k])));
+  return {
+    id: 'sub-' + Date.now().toString(36),
+    variantKey: contribVariantKey(),
+    vehicleId: CONTRIB.vehicleId, axle: CONTRIB.axle,
+    submitterId: 'me', submitterName: CONTRIB.name || 'you',
+    submitterVerified: false, submittedAt: new Date().toISOString(),
+    suspensionPackage: CONTRIB.pkg, rideHeightDropMm: CONTRIB.drop,
+    bodyOriginal: CONTRIB.bodyOriginal, method: CONTRIB.method,
+    wheelOnCar: haveWheel ? {
+      widthIn: Number(w.widthIn), diameterIn: Number(w.diameterIn), etMm: Number(w.etMm),
+      tireSectionMm: Number(w.tireSectionMm), tireAspect: Number(w.tireAspect),
+    } : null,
+    values: vals, notes: CONTRIB.notes, status: 'pending',
+  };
+}
+
+function renderContribute() {
+  const draft = draftSubmission();
+  const issues = draft ? validateSub(draft) : [];
+  const issueFor = k => issues.find(i => i.key === k);
+  const blocking = issues.filter(i => i.severity === 'reject');
+  const cons = aggregateVariant(contribVariantKey(), loadSubs());
+  const v = VEHICLES.find(x => x.id === CONTRIB.vehicleId) || VEHICLES[0];
+
+  const vehOpts = ['BMW', 'Mercedes-Benz', 'Porsche'].map(mk =>
+    '<optgroup label="' + mk + '">' + VEHICLES.filter(x => x.make === mk).map(x =>
+      opt(x.id, x.chassis + ' · ' + x.model + ' · ' + x.years, CONTRIB.vehicleId)).join('')
+    + '</optgroup>').join('');
+
+  const measureFields = MEAS_KEYS.map(k => {
+    const d = MEAS[k], iss = issueFor(k);
+    return '<div class="mfield">'
+      + '<label class="lb" for="cv_' + k + '">' + esc(d.label) + (d.core ? '' : ' — optional') + '</label>'
+      + '<div class="mrow"><input type="number" step="0.1" id="cv_' + k + '" value="' + esc(CONTRIB.values[k] ?? '')
+      + '" placeholder="' + d.range[0] + ' to ' + d.range[1] + '"><span class="munit">' + d.unit + '</span></div>'
+      + '<p class="note" style="margin-top:5px">' + esc(d.how) + '</p>'
+      + '<p class="note" style="margin-top:3px"><span class="gld">Why: </span>' + esc(d.why) + '</p>'
+      + (iss ? '<p class="note ' + (iss.severity === 'reject' ? 'bad' : 'warn') + '">' + esc(iss.message) + '</p>' : '')
+      + '</div>';
+  }).join('');
+
+  const subFlags = issues.filter(i => i.key === 'submission')
+    .map(i => '<p class="note warn">' + esc(i.message) + '</p>').join('');
+
+  const statusRows = CORE_KEYS.map(k => {
+    const c = cons.byKey[k];
+    const ok = isFinite(c.value) && !c.conflict;
+    return row(MEAS[k].label.split(',')[0],
+      ok ? fmt(c.value, 1) + ' ' + c.unit + ' · ' + c.agreeing + '/' + MIN_CORROBORATION : 'none yet',
+      ok ? '' : 'mute');
+  }).join('');
+
+  document.getElementById('page-contribute').innerHTML =
+    '<div class="pagehead">'
+    + '<h2>Contribute a measurement</h2>'
+    + '<p>Four dimensions turn a chassis from an estimate into something the engine will return a real '
+    + 'verdict on. Three independent people measuring the same variant is what promotes it for everybody.</p>'
+    + '</div>'
+
+    + '<div class="cols2">'
+    + '<div class="stack">'
+
+    + '<div class="card"><div class="chead"><h2>Which car, exactly</h2></div><div class="cbody">'
+    + '<p class="note warn" style="margin-top:0">Measurements only combine within an exact variant. A car on '
+    + 'sports suspension is not the same variant as one on standard springs, and an M3 arch is not an E30 arch. '
+    + 'If in doubt, say so in the notes rather than guessing.</p>'
+    + '<div class="row2" style="margin-top:10px">'
+    + '<div class="fld"><label class="lb" for="c_veh">Chassis</label><select id="c_veh">' + vehOpts + '</select></div>'
+    + '<div class="fld"><label class="lb" for="c_axle">Axle</label><select id="c_axle">'
+    + opt('front', 'Front', CONTRIB.axle) + opt('rear', 'Rear', CONTRIB.axle) + '</select></div>'
+    + '<div class="fld"><label class="lb" for="c_pkg">Suspension on the car</label><select id="c_pkg">'
+    + ['factory','lowering_springs','coilover_standard','coilover_short_stroke','air_driving']
+        .map(p => opt(p, PACKAGE[p].label, CONTRIB.pkg)).join('') + '</select></div>'
+    + '<div class="fld"><label class="lb" for="c_drop">Drop from stock, mm</label>'
+    + '<input type="number" id="c_drop" value="' + CONTRIB.drop + '"></div>'
+    + '<div class="fld"><label class="lb" for="c_name">Your name or handle</label>'
+    + '<input type="text" id="c_name" value="' + esc(CONTRIB.name) + '" placeholder="optional"></div>'
+    + '<div class="fld"><label class="lb" for="c_method">How you measured</label><select id="c_method">'
+    + Object.keys(METHOD_LABEL).map(m => opt(m, METHOD_LABEL[m], CONTRIB.method)).join('') + '</select></div>'
+    + '</div>'
+    + '<label class="chk"><input type="checkbox" id="c_orig"' + (CONTRIB.bodyOriginal ? ' checked' : '') + '>'
+    + '<span>Bodywork is original: arches never rolled, pulled, flared or repaired.</span></label>'
+    + '</div></div>'
+
+    + '<div class="card"><div class="chead"><h2>Wheel currently on the car</h2>'
+    + '<span class="lbl">enables the sanity check</span></div><div class="cbody">'
+    + '<p class="note" style="margin-top:0">Optional, and worth the thirty seconds. Knowing the fitted wheel lets '
+    + 'the form catch the commonest error immediately: an arch radius smaller than the tyre radius means the tape '
+    + 'went to the top of the tyre rather than to the hub centre.</p>'
+    + '<div class="row5" style="margin-top:10px">'
+    + [['widthIn','Width J'],['diameterIn','Dia in'],['etMm','ET mm'],['tireSectionMm','Section'],['tireAspect','Aspect']]
+        .map(([k, label]) => '<div class="fld"><label class="lb" for="cw_' + k + '">' + label + '</label>'
+          + '<input type="number" id="cw_' + k + '" value="' + esc(CONTRIB.wheel[k]) + '"></div>').join('')
+    + '</div></div></div>'
+
+    + '<div class="card"><div class="chead"><h2>Measurements</h2>'
+    + '<span class="lbl">' + esc(METHOD_LABEL[CONTRIB.method]) + '</span></div><div class="cbody">'
+    + '<p class="note" style="margin-top:0">How you measured sets the tolerance that can ever be claimed from '
+    + 'this. Agreement between tape measurements never adds up to caliper precision, and the engine will not '
+    + 'pretend otherwise.</p>'
+    + '<div class="mlist">' + measureFields + '</div>'
+    + '<div class="fld"><label class="lb" for="c_notes">Notes</label>'
+    + '<input type="text" id="c_notes" value="' + esc(CONTRIB.notes) + '" placeholder="anything a reviewer should know"></div>'
+    + subFlags
+    + (blocking.length ? '<p class="note bad">' + blocking.length + ' problem'
+        + (blocking.length === 1 ? '' : 's') + ' must be fixed before this can be submitted.</p>' : '')
+    + '<div class="btnrow" style="margin-top:12px"><button class="btn prime" id="c_submit">SUBMIT FOR REVIEW</button>'
+    + (CONTRIB.justSubmitted ? '<span class="num sml" style="color:var(--ok)">Submitted. It sits in the review '
+        + 'queue until somebody accepts it.</span>' : '')
+    + '</div></div></div>'
+
+    + '</div>'
+
+    + '<div class="stack">'
+    + '<div class="card"><div class="chead"><h2>This variant so far</h2>'
+    + gchip(cons.weakestCoreGrade) + '</div><div class="cbody">'
+    + '<p class="note" style="margin-top:0">' + esc(nextNeed(cons)) + '</p>'
+    + '<div style="margin-top:8px">' + statusRows + '</div>'
+    + (cons.excluded.length ? '<p class="note warn">' + cons.excluded.length + ' submission'
+        + (cons.excluded.length === 1 ? '' : 's') + ' held out of the consensus: '
+        + esc(cons.excluded[0].reason) + '</p>' : '')
+    + '<p class="note">' + esc(v.chassis + ' · ' + v.model + ' · ' + CONTRIB.axle + ' · ' + PACKAGE[CONTRIB.pkg].label) + '</p>'
+    + '</div></div>'
+
+    + '<div class="card"><div class="chead"><h2>Why three people</h2></div><div class="cbody">'
+    + '<p class="note" style="margin-top:0">One measurement is a data point. It could be a mis-read tape, a car '
+    + 'with a quietly repaired arch, or a variant nobody realised was different.</p>'
+    + '<p class="note">Three independent people arriving within a few millimetres of each other is evidence, and '
+    + 'the engine treats it as such: that variant starts returning real clearance verdicts instead of UNKNOWN. '
+    + 'Outliers are excluded rather than averaged in, and if the submissions split into two camps the engine '
+    + 'reports a disagreement instead of inventing a midpoint nobody measured.</p>'
+    + '</div></div>'
+    + '</div></div>';
+
+  // --- wiring
+  const bindVal = (id, fn) => { const el = document.getElementById(id); if (el) el.onchange = e => { fn(e.target.value); renderPage(); }; };
+  bindVal('c_veh', v2 => CONTRIB.vehicleId = v2);
+  bindVal('c_axle', v2 => CONTRIB.axle = v2);
+  bindVal('c_pkg', v2 => CONTRIB.pkg = v2);
+  bindVal('c_method', v2 => CONTRIB.method = v2);
+  bindVal('c_drop', v2 => CONTRIB.drop = Number(v2) || 0);
+  bindVal('c_name', v2 => CONTRIB.name = v2);
+  bindVal('c_notes', v2 => CONTRIB.notes = v2);
+  const orig = document.getElementById('c_orig');
+  if (orig) orig.onchange = e => { CONTRIB.bodyOriginal = e.target.checked; renderPage(); };
+  for (const k of Object.keys(CONTRIB.wheel)) {
+    const el = document.getElementById('cw_' + k);
+    if (el) el.onchange = e => { CONTRIB.wheel[k] = e.target.value; renderPage(); };
+  }
+  for (const k of MEAS_KEYS) {
+    const el = document.getElementById('cv_' + k);
+    if (el) el.onchange = e => { CONTRIB.values[k] = e.target.value; CONTRIB.justSubmitted = null; renderPage(); };
+  }
+  const sb = document.getElementById('c_submit');
+  if (sb) sb.onclick = () => {
+    const d = draftSubmission();
+    if (!d) { toast('Enter at least one measurement'); return; }
+    const res = addSub(d);
+    if (res.ok) { CONTRIB.justSubmitted = d.id; CONTRIB.values = {}; toast('Submitted for review'); renderPage(); }
+    else toast('Fix the flagged problems first');
+  };
+}
+
+/**
+ * One-dimensional plot of every submitted value, with the agreement band
+ * drawn and outliers ringed. A reviewer judging whether two numbers are
+ * the same measurement needs to SEE the spread; a column of figures hides
+ * exactly the thing being judged.
+ */
+function spreadSvg(c) {
+  if (!c.points.length) return '';
+  const vals = c.points.map(p => p.value);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const pad = Math.max((hi - lo) * 0.2, c.band, c.unit === '°' ? 0.2 : 1);
+  const min = lo - pad, max = hi + pad;
+  const W = 520, H = 60;
+  const X = v => 16 + ((v - min) / (max - min || 1)) * (W - 32);
+  const dp = c.unit === '°' ? 2 : 1;
+  const show = v => { const r = Number(v.toFixed(dp)); return Number.isInteger(r) ? String(r) : r.toFixed(dp); };
+  const col = c.conflict ? 'var(--bad)' : 'var(--ok)';
+  let s = '';
+  if (isFinite(c.value)) {
+    const a = X(c.value - c.band), b = X(c.value + c.band);
+    s += '<rect x="' + fmt(a, 1) + '" y="15" width="' + fmt(Math.max(b - a, 2), 1) + '" height="22" rx="3" fill="'
+      + col + '" opacity=".14" stroke="' + col + '" stroke-opacity=".45"/>';
+  }
+  s += '<line x1="16" y1="26" x2="' + (W - 16) + '" y2="26" stroke="var(--line2)"/>';
+  if (isFinite(c.value) && !c.conflict)
+    s += '<line x1="' + fmt(X(c.value), 1) + '" y1="11" x2="' + fmt(X(c.value), 1) + '" y2="41" stroke="var(--gold)" stroke-width="1.6"/>';
+  for (const p of c.points) {
+    s += '<circle cx="' + fmt(X(p.value), 1) + '" cy="26" r="' + (p.outlier ? 4 : 5) + '" fill="'
+      + (p.outlier ? 'none' : 'var(--gold)') + '" stroke="' + (p.outlier ? 'var(--bad)' : 'none')
+      + '" stroke-width="1.8"/>';
+    s += '<text x="' + fmt(X(p.value), 1) + '" y="52" text-anchor="middle" class="dim2" style="fill:'
+      + (p.outlier ? 'var(--bad)' : 'var(--mute)') + '">' + show(p.value) + '</text>';
+  }
+  s += '<text x="16" y="10" class="dim">' + (isFinite(c.value) && !c.conflict
+    ? 'band ±' + fmt(c.band, c.unit === '°' ? 2 : 1) + ' ' + c.unit : 'no agreed value') + '</text>';
+  return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Spread of submitted values">' + s + '</svg>';
+}
+
+function renderReview() {
+  const subs = loadSubs();
+  const pending = subs.filter(s => s.status === 'pending');
+  const keys = [...new Set(subs.map(s => s.variantKey))];
+
+  const describe = s => {
+    const v = VEHICLES.find(x => x.id === s.vehicleId);
+    return (v ? v.chassis + ' ' + v.model : s.vehicleId) + ' · ' + s.axle
+      + ' · ' + (PACKAGE[s.suspensionPackage] || {}).label
+      + (s.rideHeightDropMm ? ' · ' + s.rideHeightDropMm + ' mm drop' : '');
+  };
+
+  let body = '';
+  if (REVIEW_TAB === 'queue') {
+    if (pending.some(s => s.id.indexOf('example-') === 0))
+      body += '<p class="note warn">The queue is seeded with three EXAMPLE records so this page has something to '
+        + 'show. Their numbers are illustrative, not measured from a car. Accepting all three will promote the E30 '
+        + 'front variant to corroborated and change what the studio reports for it — which is the loop working, '
+        + 'but do it knowing the figures are invented. Reject them to clear the queue instead.</p>';
+    if (!pending.length)
+      body += '<div class="card"><div class="chead"><h2>Nothing pending</h2></div><div class="cbody">'
+        + '<p class="note" style="margin-top:0">The queue is empty. New submissions land here before they can '
+        + 'affect any consensus.</p></div></div>';
+    body += pending.map(s => {
+      const flags = validateSub(s).filter(i => i.severity === 'flag');
+      return '<div class="card"><div class="chead"><h2>' + esc(describe(s)) + '</h2>'
+        + '<span class="lbl">' + esc(s.submitterName || s.submitterId) + '</span></div><div class="cbody">'
+        + '<div class="row2">' + Object.keys(s.values).map(k =>
+            row(MEAS[k] ? MEAS[k].label.split(',')[0] : k, fmt(s.values[k], 2) + ' ' + (MEAS[k] ? MEAS[k].unit : ''))).join('')
+        + '</div>'
+        + '<p class="note">Method: ' + esc((s.method || '').replace(/_/g, ' '))
+        + (s.wheelOnCar ? ' · fitted ' + s.wheelOnCar.widthIn + 'J×' + s.wheelOnCar.diameterIn
+            + ' ET' + s.wheelOnCar.etMm + ', ' + s.wheelOnCar.tireSectionMm + '/' + s.wheelOnCar.tireAspect : '')
+        + (!s.bodyOriginal ? ' · BODYWORK MODIFIED' : '')
+        + (s.notes ? ' · ' + esc(s.notes) : '') + '</p>'
+        + flags.map(f => '<p class="note warn">' + esc(f.message) + '</p>').join('')
+        + '<div class="btnrow" style="margin-top:10px">'
+        + '<button class="btn prime rv-acc" data-id="' + esc(s.id) + '">ACCEPT</button>'
+        + '<button class="btn rv-rej" data-id="' + esc(s.id) + '">REJECT</button>'
+        + '</div></div></div>';
+    }).join('');
+  } else {
+    if (!keys.length)
+      body += '<div class="card"><div class="chead"><h2>No variants yet</h2></div>'
+        + '<div class="cbody"><p class="note" style="margin-top:0">Nothing has been submitted.</p></div></div>';
+    body += keys.map(k => {
+      const c = aggregateVariant(k, subs);
+      const parts = k.split('|');
+      const v = VEHICLES.find(x => x.id === parts[0]);
+      return '<div class="card"><div class="chead"><h2>'
+        + esc((v ? v.chassis + ' ' + v.model : parts[0]) + ' · ' + parts[1] + ' · '
+          + ((PACKAGE[parts[2]] || {}).label || parts[2])) + '</h2>'
+        + gchip(c.weakestCoreGrade) + '</div><div class="cbody">'
+        + '<p class="note' + (c.analysable ? '' : ' warn') + '" style="margin-top:0">' + esc(nextNeed(c)) + '</p>'
+        + MEAS_KEYS.map(mk => {
+            const cc = c.byKey[mk];
+            if (!cc.points.length) return '';
+            return '<div class="mblock">'
+              + '<div class="mhead"><span>' + esc(cc.label) + '</span>'
+              + '<span class="num" style="color:' + (cc.conflict ? 'var(--bad)' : 'var(--gold)') + '">'
+              + (isFinite(cc.value) && !cc.conflict
+                  ? fmt(cc.value, cc.unit === '°' ? 2 : 1) + ' ±' + fmt(cc.tolerance, 2) + ' ' + cc.unit
+                  : 'unresolved')
+              + ' ' + gchip(cc.grade) + '</span></div>'
+              + spreadSvg(cc)
+              + '<p class="note">' + esc(cc.note) + '</p>'
+              + '<p class="note">' + cc.agreeing + ' of ' + cc.distinct + ' submitters agree'
+              + (cc.agreeing < MIN_CORROBORATION && !cc.conflict ? ' · ' + cc.needsMore + ' more promotes it' : '')
+              + '</p></div>';
+          }).join('')
+        + (c.excluded.length ? '<p class="note warn">Held out of the consensus: ' + c.excluded.length
+            + ' submission' + (c.excluded.length === 1 ? '' : 's') + '. ' + esc(c.excluded[0].reason) + '</p>' : '')
+        + '</div></div>';
+    }).join('');
+  }
+
+  document.getElementById('page-review').innerHTML =
+    '<div class="pagehead"><h2>Review queue</h2>'
+    + '<p>Nothing is promoted automatically. Arithmetic rejects the impossible; a person decides whether what '
+    + 'is left really describes the variant.</p></div>'
+    + '<div class="seg" id="rvtabs" style="width:fit-content;margin-bottom:14px">'
+    + '<button data-v="queue" aria-pressed="' + (REVIEW_TAB === 'queue') + '">PENDING (' + pending.length + ')</button>'
+    + '<button data-v="variants" aria-pressed="' + (REVIEW_TAB === 'variants') + '">VARIANTS (' + keys.length + ')</button>'
+    + '</div>'
+    + '<div class="stack">' + body + '</div>';
+
+  [...document.querySelectorAll('#rvtabs button')].forEach(b =>
+    b.onclick = () => { REVIEW_TAB = b.dataset.v; renderPage(); });
+  [...document.querySelectorAll('.rv-acc')].forEach(b =>
+    b.onclick = () => { setSubStatus(b.dataset.id, 'accepted'); toast('Accepted'); renderPage(); });
+  [...document.querySelectorAll('.rv-rej')].forEach(b =>
+    b.onclick = () => { setSubStatus(b.dataset.id, 'rejected'); toast('Rejected'); renderPage(); });
+}
+
+/** Single-page routing: one of three views is visible at a time. */
+function renderPage() {
+  const page = S.page || 'studio';
+  document.getElementById('page-studio').hidden = page !== 'studio';
+  document.getElementById('page-contribute').hidden = page !== 'contribute';
+  document.getElementById('page-review').hidden = page !== 'review';
+  [...document.querySelectorAll('#navseg button')].forEach(b =>
+    b.setAttribute('aria-pressed', String(b.dataset.v === page)));
+  // the axle toggle drives the studio only; contribute and review each
+  // carry their own axle context
+  const ax = document.getElementById('axleseg');
+  if (ax) ax.hidden = page !== 'studio';
+  if (page === 'studio') renderAll();
+  else if (page === 'contribute') renderContribute();
+  else renderReview();
+}
 
 </script>

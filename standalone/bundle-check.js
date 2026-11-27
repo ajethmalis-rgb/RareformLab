@@ -16,9 +16,38 @@ const r2 = (v, d) => { const f = 10 ** (d ?? 2); return Math.round(v * f) / f; }
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 
 /* ---- evidence grading. The reason this product can refuse to lie. ---- */
-const GRADE_RANK = { manufacturer_documented: 4, professionally_measured: 3, community_reported: 2, estimated: 1, unknown: 0 };
-const GRADE_LABEL = { manufacturer_documented: 'FACTORY DOC', professionally_measured: 'PRO MEASURED', community_reported: 'YOU MEASURED', estimated: 'ESTIMATED', unknown: 'NO DATA' };
-const GRADE_COLOR = { manufacturer_documented: 'var(--ok)', professionally_measured: 'var(--ok)', community_reported: 'var(--info)', estimated: 'var(--warn)', unknown: 'var(--gray)' };
+/*
+ * Evidence grading. The ranks decide one thing: whether a result may come
+ * back green. `isVerified` is the line, and three grades sit above it.
+ *
+ * `self_measured` is the one worth explaining. The other grades answer
+ * "how well is this VARIANT known", which is the right question for a
+ * shared library. But a person in the studio is asking about THEIR car,
+ * and for that question their own tape measurement is the best evidence
+ * that exists — better than a consensus of other people's cars. Grading it
+ * as a single community report, which is what the variant-level scheme
+ * would do, means somebody does the work of measuring and still gets
+ * UNKNOWN. That is a bug, not caution.
+ *
+ * It is deliberately NOT the same as corroborated: measuring your own car
+ * resolves your own verdict and promotes nothing for anyone else. The way
+ * it helps others is to contribute it.
+ */
+const GRADE_RANK = {
+  manufacturer_documented: 5, professionally_measured: 4,
+  self_measured: 3.5, community_corroborated: 3,
+  community_reported: 2, estimated: 1, unknown: 0,
+};
+const GRADE_LABEL = {
+  manufacturer_documented: 'FACTORY DOC', professionally_measured: 'PRO MEASURED',
+  self_measured: 'YOUR CAR', community_corroborated: 'CORROBORATED',
+  community_reported: 'SINGLE REPORT', estimated: 'ESTIMATED', unknown: 'NO DATA',
+};
+const GRADE_COLOR = {
+  manufacturer_documented: 'var(--ok)', professionally_measured: 'var(--ok)',
+  self_measured: 'var(--ok)', community_corroborated: 'var(--ok)',
+  community_reported: 'var(--info)', estimated: 'var(--warn)', unknown: 'var(--gray)',
+};
 const isVerified = g => GRADE_RANK[g] >= 3;
 const worstGrade = (...gs) => gs.reduce((a, b) => GRADE_RANK[b] < GRADE_RANK[a] ? b : a, 'manufacturer_documented');
 
@@ -155,12 +184,13 @@ const PACKAGE = {
 };
 const ARCH_GAIN = { untouched: 0, rolled: 8, rolled_and_pulled: 14 };
 
-function cornerState(arch, pkg, dropMm, compressionMm, camberOverride, travelOverride, bumpTravelMm) {
+function cornerState(arch, pkg, dropMm, compressionMm, camberOverride, travelOverride, bumpTravelMm, grades) {
+  grades = grades || {};
   const total = dropMm + compressionMm;
   let camberDeg, camberGrade, note;
   if (camberOverride !== null && camberOverride !== undefined && camberOverride !== '') {
     camberDeg = Number(camberOverride) + (GEOMETRY[arch].gain * compressionMm) / 10;
-    camberGrade = 'community_reported';
+    camberGrade = grades.camber || 'self_measured';
     note = 'Camber taken from your measurement. Change under compression still uses the architecture rate, not a measured curve.';
   } else {
     camberDeg = (GEOMETRY[arch].gain * total) / 10;
@@ -170,7 +200,7 @@ function cornerState(arch, pkg, dropMm, compressionMm, camberOverride, travelOve
   let remainingTravelMm, travelGrade;
   if (travelOverride !== null && travelOverride !== undefined && travelOverride !== '') {
     remainingTravelMm = Math.max(0, Number(travelOverride) - compressionMm);
-    travelGrade = 'community_reported';
+    travelGrade = grades.travel || 'self_measured';
   } else {
     // Lowering on stock-length hardware spends roughly 55% of the drop out of
     // available bump travel; the rest is the stop engaging earlier. Estimated.
@@ -458,6 +488,297 @@ function optimise(opts) {
 }
 
 /* ============================================================
+   CONTRIBUTION LOOP — ported from the tested TypeScript build.
+   Same thresholds, same rules. See the repo's aggregate.test.ts
+   and contribution-e2e.test.ts for the cases that pin these.
+
+   This is how a chassis stops being an estimate. One person with
+   a tape measure is a data point; three independent people
+   agreeing is evidence, and the engine treats it as such.
+   ============================================================ */
+
+const MEAS = {
+  archRadiusMm: {
+    label: 'Fender lip to hub centre, vertical', unit: 'mm', range: [200, 600], core: true,
+    how: 'Car on the ground at ride height, wheel on. Measure straight up from the centre of the wheel to the lowest point of the fender lip. Read it at the top of the arch, not at the front or rear of the opening.',
+    why: 'Decides whether the tyre can reach the lip at all. Above the tyre radius and the assembly sits inside the opening, where it cannot touch the lip however far out it sits.',
+  },
+  archLateralMm: {
+    label: 'Hub face to fender lip, lateral', unit: 'mm', range: [10, 260], core: true,
+    how: 'Wheel off. Lay a straight edge against the hub mounting face, square to it, and measure outboard to the fender lip. Use a rule and a square; this one cannot be eyeballed.',
+    why: 'Fixes where the lip sits across the car. Every poke, tuck and arch clearance figure is measured from it.',
+  },
+  innerDepthMm: {
+    label: 'Hub face to nearest inner obstruction', unit: 'mm', range: [60, 320], core: true,
+    how: 'Wheel off, from the same mounting face, measure inboard to the closest point of the strut body, spring, perch or arm, at roughly tyre-shoulder height.',
+    why: 'Sets the inboard limit. More offset moves the assembly toward it, less offset away.',
+  },
+  travelMm: {
+    label: 'Hub travel remaining to the bump stop', unit: 'mm', range: [0, 180], core: true,
+    how: 'Jack the body until the suspension is at full compression on the stop, or measure the gap to the stop and add the stop’s own crush. Record the vertical distance the hub still has to rise.',
+    why: 'This is what static-only calculators ignore. Most rubbing happens at the stop, not at rest.',
+  },
+  camberDeg: {
+    label: 'Camber at this ride height', unit: '°', range: [-8, 5], core: false, scale: 0.08,
+    how: 'A digital gauge on the wheel face at ride height, or a plumb line and rule against the rim flange. Negative when the top leans in.',
+    why: 'Decides where the tyre shoulder actually sits against the arch. Without it the model falls back to a rule of thumb for the suspension type, and no arch result can be better than estimated.',
+  },
+  wellCeilingMm: {
+    label: 'Hub centre to top of the wheel well', unit: 'mm', range: [250, 800], core: false,
+    how: 'From the hub centre straight up to the highest point of the inner wheel housing. Optional, but it is the real vertical ceiling.',
+    why: 'The tyre tucks up into the well above the lip, so this is the vertical limit rather than the arch.',
+  },
+};
+const MEAS_KEYS = Object.keys(MEAS);
+const CORE_KEYS = MEAS_KEYS.filter(k => MEAS[k].core);
+
+/** Typical repeatability of each method, mm. Scaled per key for non-mm units. */
+const METHOD_TOL = {
+  tape_measure: 3, caliper: 1, calibrated_jig: 1.5,
+  laser_scan: 1, cmm: 0.5, photogrammetry: 5,
+};
+const METHOD_LABEL = {
+  tape_measure: 'Tape measure or steel rule', caliper: 'Caliper',
+  calibrated_jig: 'Calibrated jig', laser_scan: 'Laser scan', cmm: 'CMM',
+  photogrammetry: 'Photogrammetry, with a calibration reference in frame',
+};
+const PRO_METHODS = ['cmm', 'laser_scan', 'calibrated_jig'];
+const tolFor = (method, key) =>
+  (METHOD_TOL[method] || 25) * ((key && MEAS[key] && MEAS[key].scale) || 1);
+
+/* ---- thresholds. Identical to the TypeScript build. ---- */
+const MIN_CORROBORATION = 3;
+const AGREEMENT_FACTOR = 3;
+const AGREEMENT_FLOOR_MM = 5;
+
+const vkey = (vehicleId, axle, pkg) => [vehicleId, axle, pkg, 'factory'].join('|');
+
+/* ---- robust statistics. Median and MAD, never mean and SD: with four
+   hand measurements one transposed digit destroys a mean and barely
+   moves a median. ---- */
+function med(xs) {
+  if (!xs.length) return NaN;
+  const s = [...xs].sort((a, b) => a - b), m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+function madOf(xs) {
+  if (!xs.length) return NaN;
+  const m = med(xs);
+  return med(xs.map(x => Math.abs(x - m)));
+}
+
+/* ---- validation, before a reviewer ever sees it ---- */
+function validateSub(sub) {
+  const issues = [];
+  for (const k of Object.keys(sub.values)) {
+    const v = sub.values[k], def = MEAS[k];
+    if (!def) continue;
+    if (!isFinite(v)) { issues.push({ key: k, severity: 'reject', message: 'Not a number.' }); continue; }
+    if (v < def.range[0] || v > def.range[1])
+      issues.push({ key: k, severity: 'reject',
+        message: v + ' ' + def.unit + ' is outside the possible range ' + def.range[0] + ' to ' + def.range[1] + '. Check the units and the datum.' });
+  }
+  const w = sub.wheelOnCar;
+  if (w) {
+    const tyreR = (w.diameterIn * 25.4) / 2 + (w.tireSectionMm * w.tireAspect) / 100;
+    const a = sub.values.archRadiusMm;
+    if (isFinite(a)) {
+      if (a < tyreR) issues.push({ key: 'archRadiusMm', severity: 'reject',
+        message: 'Lip-to-hub of ' + Math.round(a) + ' mm is less than the fitted tyre’s radius of ' + Math.round(tyreR) + ' mm. The car would be resting on its own arch. This is almost always a measurement taken to the top of the tyre rather than to the hub centre.' });
+      else if (a - tyreR > 160) issues.push({ key: 'archRadiusMm', severity: 'flag',
+        message: 'Implies a ' + Math.round(a - tyreR) + ' mm arch gap, which is unusually large. Worth confirming.' });
+    }
+  }
+  if (!sub.bodyOriginal) issues.push({ key: 'submission', severity: 'flag',
+    message: 'Arch is not original. Kept on record and shown, but excluded from the consensus because it describes this car rather than the model.' });
+  if (sub.method === 'photogrammetry') issues.push({ key: 'submission', severity: 'flag',
+    message: 'Photogrammetry is admissible only with a calibration reference in frame. Confirm one was used.' });
+  return issues;
+}
+const hasReject = issues => issues.some(i => i.severity === 'reject');
+
+/* ---- consensus ---- */
+function consensusFor(key, subs) {
+  const def = MEAS[key];
+  const usable = subs.filter(s => s.status === 'accepted' && isFinite(s.values[key]));
+  if (!usable.length) return {
+    key, label: def.label, unit: def.unit, value: NaN, tolerance: NaN, grade: 'unknown',
+    points: [], distinct: 0, agreeing: 0, band: NaN, conflict: false,
+    needsMore: MIN_CORROBORATION, note: 'No accepted submission carries this measurement yet.',
+  };
+
+  const values = usable.map(s => s.values[key]);
+  const m = med(values), spread = madOf(values);
+  const worstTol = Math.max(...usable.map(s => tolFor(s.method, key)));
+  const unitScale = (def.scale || 1);
+  const band = Math.max(AGREEMENT_FACTOR * worstTol, AGREEMENT_FLOOR_MM * unitScale);
+
+  /* Scatter test, and it must come BEFORE the outlier test. A MAD-derived
+     threshold grows with the spread, so four submissions at 380, 381, 420,
+     421 give a MAD of 20, a threshold of 60, and therefore no outliers at
+     all — the arithmetic would report a corroborated 400.5 mm that nobody
+     measured, sitting between two real clusters. When the scatter exceeds
+     what the instrument explains, that is a disagreement about the variant,
+     not noise, and no further arithmetic should resolve it. */
+  const scattered = spread > band;
+  const threshold = Math.max(3 * spread, band);
+
+  const points = usable.map(s => {
+    const v = s.values[key], dev = Math.abs(v - m);
+    return { id: s.id, who: s.submitterId, name: s.submitterName || s.submitterId,
+      value: v, method: s.method, outlier: dev > threshold, dev: r2(dev, 2) };
+  });
+  const inliers = points.filter(p => !p.outlier);
+  const outliers = points.filter(p => p.outlier);
+  const distinct = new Set(points.map(p => p.who)).size;
+  const agreeing = new Set(inliers.map(p => p.who)).size;
+  const conflict = scattered || (outliers.length > 0 && outliers.length >= inliers.length);
+
+  const iv = inliers.map(p => p.value);
+  const value = iv.length ? med(iv) : m;
+  const iSpread = iv.length > 1 ? (Math.max(...iv) - Math.min(...iv)) / 2 : 0;
+  const bestTol = Math.min(...(inliers.length ? inliers : points).map(p => tolFor(p.method, key)));
+  const tolerance = Math.max(bestTol, iSpread);
+
+  const hasPro = (inliers.length ? inliers : points).some(p => {
+    const s = usable.find(x => x.id === p.id);
+    return PRO_METHODS.indexOf(p.method) >= 0 && s && s.submitterVerified;
+  });
+
+  let grade, note;
+  if (conflict) {
+    grade = 'community_reported';
+    note = scattered
+      ? 'Submissions are scattered across ' + r2(Math.max(...values) - Math.min(...values), 1) + ' ' + def.unit
+        + ', far beyond the ' + r2(band, 1) + ' ' + def.unit + ' the instrument explains. That is a disagreement about what this variant is, not measurement noise. Not promoted, and no average is reported as the answer — the midpoint of two camps is a figure nobody measured.'
+      : 'Submissions disagree: ' + inliers.length + ' cluster around ' + r2(value, 1) + ' ' + def.unit
+        + ' and ' + outliers.length + ' sit outside the band. Not promoted — a person has to decide which describes the variant.';
+  } else if (hasPro) {
+    grade = 'professionally_measured';
+    note = 'Instrument measurement from a verified submitter' + (agreeing > 1 ? ', corroborated by ' + (agreeing - 1) + ' more' : '') + '.';
+  } else if (agreeing >= MIN_CORROBORATION) {
+    grade = 'community_corroborated';
+    note = agreeing + ' independent submitters agree within ' + r2(tolerance, 2) + ' ' + def.unit
+      + (outliers.length ? '; ' + outliers.length + ' outlier excluded' : '') + '.';
+  } else {
+    grade = 'community_reported';
+    const need = MIN_CORROBORATION - agreeing;
+    note = agreeing + ' submitter' + (agreeing === 1 ? '' : 's') + ' so far. ' + need + ' more agreeing measurement'
+      + (need === 1 ? '' : 's') + ' promotes this to corroborated, which is what lets the engine return a pass on it.';
+  }
+
+  return { key, label: def.label, unit: def.unit, value: r2(value, 2), tolerance: r2(tolerance, 2),
+    grade, points, distinct, agreeing, band: r2(band, 2), conflict,
+    needsMore: Math.max(0, MIN_CORROBORATION - agreeing), note };
+}
+
+const GRADE_ORDER = { manufacturer_documented: 5, professionally_measured: 4,
+  community_corroborated: 3, community_reported: 2, estimated: 1, unknown: 0 };
+
+function aggregateVariant(variantKey, subs) {
+  const mine = subs.filter(s => s.variantKey === variantKey);
+  const excluded = [];
+  const eligible = mine.filter(s => {
+    if (!s.bodyOriginal) {
+      excluded.push({ id: s.id, reason: 'Arch is not original, so this describes the car rather than the model.' });
+      return false;
+    }
+    return true;
+  });
+  const byKey = {};
+  for (const k of MEAS_KEYS) byKey[k] = consensusFor(k, eligible);
+  const weakest = CORE_KEYS.map(k => byKey[k].grade)
+    .reduce((a, g) => GRADE_ORDER[g] < GRADE_ORDER[a] ? g : a, 'manufacturer_documented');
+  return {
+    variantKey, byKey, excluded,
+    coreComplete: CORE_KEYS.every(k => isFinite(byKey[k].value)),
+    analysable: GRADE_ORDER[weakest] >= GRADE_ORDER.community_corroborated,
+    weakestCoreGrade: weakest,
+    pending: mine.filter(s => s.status === 'pending').length,
+    total: mine.length,
+  };
+}
+
+/** What this variant needs next, phrased as a request rather than a status. */
+function nextNeed(v) {
+  const missing = CORE_KEYS.filter(k => !isFinite(v.byKey[k].value));
+  if (missing.length)
+    return 'Needs a first measurement of: ' + missing.map(k => MEAS[k].label.toLowerCase()).join(', ') + '.';
+  const conflicted = CORE_KEYS.filter(k => v.byKey[k].conflict);
+  if (conflicted.length)
+    return 'Submissions disagree on ' + conflicted.map(k => MEAS[k].label.toLowerCase()).join(' and ')
+      + '. Someone has to resolve that before this variant can be promoted.';
+  const short = CORE_KEYS.map(k => ({ k, c: v.byKey[k] })).filter(x => x.c.needsMore > 0)
+    .sort((a, b) => b.c.needsMore - a.c.needsMore);
+  if (short.length) {
+    const w = short[0];
+    return w.c.needsMore + ' more independent measurement' + (w.c.needsMore === 1 ? '' : 's')
+      + ' of ' + MEAS[w.k].label.toLowerCase() + ' promotes this variant to corroborated.';
+  }
+  return 'All four core measurements are corroborated. This variant returns real verdicts.';
+}
+
+/** A conflicted consensus hands the solver nothing; its median is for a human only. */
+function consensusDim(c) {
+  if (!c || !isFinite(c.value) || c.conflict) return null;
+  return { known: true, value: c.value, grade: c.grade, tolerance: c.tolerance };
+}
+
+/* ---- storage ---- */
+const SUB_KEY = 'rareform.submissions.v1';
+const SUBS = { list: [], loaded: false };
+
+function loadSubs() {
+  if (SUBS.loaded) return SUBS.list;
+  SUBS.loaded = true;
+  try {
+    const raw = localStorage.getItem(SUB_KEY);
+    if (raw) SUBS.list = JSON.parse(raw).filter(s => s && s.id && s.variantKey && s.values);
+  } catch (e) { /* private window or blocked storage */ }
+  return SUBS.list;
+}
+function saveSubs() {
+  try { localStorage.setItem(SUB_KEY, JSON.stringify(SUBS.list)); } catch (e) {}
+}
+function addSub(sub) {
+  const issues = validateSub(sub);
+  if (hasReject(issues)) return { ok: false, issues };
+  SUBS.list = [sub, ...SUBS.list];
+  saveSubs();
+  return { ok: true, issues };
+}
+function setSubStatus(id, status) {
+  SUBS.list = SUBS.list.map(s => s.id === id ? { ...s, status } : s);
+  saveSubs();
+}
+
+/**
+ * Example records, seeded PENDING on purpose. An accepted example would
+ * reach consensus on its own and quietly promote a real chassis to a green
+ * verdict off invented numbers, which is the exact failure this product
+ * exists to prevent. A person has to accept them, and they are labelled.
+ */
+function seedExamples() {
+  loadSubs();
+  if (SUBS.list.some(s => s.id.indexOf('example-') === 0)) return;
+  const vk = vkey('e30', 'front', 'factory');
+  const mk = (n, who, j) => ({
+    id: 'example-' + n, variantKey: vk, vehicleId: 'e30', axle: 'front',
+    submitterId: who, submitterName: who, submitterVerified: false,
+    submittedAt: new Date().toISOString(),
+    suspensionPackage: 'factory', rideHeightDropMm: 0,
+    bodyOriginal: true, method: 'tape_measure',
+    wheelOnCar: { widthIn: 6, diameterIn: 14, etMm: 42, tireSectionMm: 195, tireAspect: 65 },
+    values: { archRadiusMm: 382 + j, archLateralMm: 88 + j, innerDepthMm: 165 + j,
+      travelMm: 80, camberDeg: r2(-0.4 + j * 0.05, 2) },
+    notes: 'EXAMPLE RECORD — illustrative numbers, not measured from a car.',
+    status: 'pending',
+  });
+  SUBS.list = [mk(1, 'example-owner-a', 0), mk(2, 'example-owner-b', 2), mk(3, 'example-owner-c', 1), ...SUBS.list];
+  saveSubs();
+}
+
+/* ============================================================
    VEHICLE LIBRARY
 
    Entries with a factory package get an ESTIMATED envelope, anchored so
@@ -582,6 +903,7 @@ const FINISHES = [
    STATE
    ============================================================ */
 const S = {
+  page: 'studio',
   vehicleId: 'e30',
   axle: 'front',
   pkg: 'factory',
@@ -629,16 +951,34 @@ function envelope(axle) {
       iD = { known:true, grade:'estimated', value: inner };
     }
   }
-  // user measurements win, and are traced as such
-  if (m.arch !== '')  aR = { known:true, grade:'community_reported', value:Number(m.arch) };
-  if (m.lip !== '')   aL = { known:true, grade:'community_reported', value:Number(m.lip) };
-  if (m.inner !== '') iD = { known:true, grade:'community_reported', value:Number(m.inner) };
+  /*
+   * Evidence layers, weakest first. Each one that exists replaces the one
+   * below it, so a partly measured corner improves rather than regressing.
+   *   1. the chassis preset          estimated
+   *   2. the community consensus     corroborated, once three people agree
+   *   3. your own measurement        self-measured, best for YOUR car
+   */
+  const cons = aggregateVariant(vkey(v.id, axle, S.pkg), loadSubs());
+  const cd = k => consensusDim(cons.byKey[k]);
+  const fromConsensus = (cur, k) => {
+    const d = cd(k);
+    return d ? { known: true, grade: d.grade, value: d.value } : cur;
+  };
+  aR = fromConsensus(aR, 'archRadiusMm');
+  aL = fromConsensus(aL, 'archLateralMm');
+  iD = fromConsensus(iD, 'innerDepthMm');
+  wC = fromConsensus(wC, 'wellCeilingMm');
+
+  // your own measurement of your own car beats any consensus of other cars
+  if (m.arch !== '')  aR = { known:true, grade:'self_measured', value:Number(m.arch) };
+  if (m.lip !== '')   aL = { known:true, grade:'self_measured', value:Number(m.lip) };
+  if (m.inner !== '') iD = { known:true, grade:'self_measured', value:Number(m.inner) };
 
   return {
     architecture: arch, innerLabel: label, bumpTravelMm: bump,
     archRadius: aR, archLateral: aL, wellCeiling: wC, innerDepth: iD,
     centreBoreMm: v.bore, hubSpigotDia: null,
-    baselinePkg: pk,
+    baselinePkg: pk, consensus: cons,
   };
 }
 
@@ -656,7 +996,18 @@ function derive(axle) {
     padDepthIn: c.pad, spacerMm: c.spacer, mount: c.mount, targetEtMm: c.targetEt,
   });
   const tire = mountTire(c.sec, c.asp, c.d, asm.achievedWidthIn);
-  const st = cornerState(env.architecture, S.pkg, drop, 0, camberOv, m.trav, env.bumpTravelMm);
+  // camber and travel follow the same evidence ladder as the envelope
+  const camberC = consensusDim(env.consensus.byKey.camberDeg);
+  const travelC = consensusDim(env.consensus.byKey.travelMm);
+  const camberVal = camberOv !== '' ? camberOv : (camberC ? camberC.value : '');
+  const travelVal = m.trav !== '' ? m.trav : (travelC ? travelC.value : '');
+  const st = cornerState(
+    env.architecture, S.pkg, drop, 0, camberVal, travelVal, env.bumpTravelMm,
+    {
+      camber: camberOv !== '' ? 'self_measured' : (camberC ? camberC.grade : undefined),
+      travel: m.trav !== '' ? 'self_measured' : (travelC ? travelC.grade : undefined),
+    },
+  );
   const cl = analyse(env, asm.wheel, tire, st, S.archMod);
 
   let baseWheel = null, baseTire = null, delta = null;
@@ -675,134 +1026,171 @@ function derive(axle) {
 const svgEl = (s) => s;
 const fmt = (n, d) => Number(n).toFixed(d === undefined ? 0 : d);
 
-/* --- 1. Transverse cross-section through the axle, with dimensions.
-   This is the engineering view: rim, tyre, arch, strut, clearances. --- */
+/* --- 1. HALF-SECTION through the axle, with dimensions.
+   A true transverse slice through a wheel produces two separate
+   cross-sections joined by a thin disc web, which is correct but reads
+   as two floating shapes. Every real tyre and rim technical drawing uses
+   a HALF-section from the spin axis up, so that is what this is: the
+   upper half, with the axis as the datum line along the bottom. --- */
 function drawSection(A) {
   const { asm, tire, cl, env, state } = A;
   const w = asm.wheel;
-  const W = 860, H = 580;
+  const W = 880, H = 545;
+
   const archR = env.archRadius.known ? env.archRadius.value - state.dropMm : null;
-  const topMm = Math.max(archR !== null ? archR + 40 : 0, tire.radiusMm + 40);
-  const spanY = topMm + tire.radiusMm + 30;
-  const spanX = Math.max(w.overallWidthMm, tire.sectionMm) + (env.innerDepth.known ? env.innerDepth.value : 160) + 220;
-  const sc = Math.min((H - 90) / spanY, (W - 220) / spanX);
-  const cx = 330, cy = 60 + (topMm * sc);
-  const X = mm => cx + mm * sc, Y = mm => cy - mm * sc;
+  const wellC = env.wellCeiling.known ? env.wellCeiling.value - state.dropMm : null;
+  const topMm = Math.max(archR || 0, tire.radiusMm) + 52;
+  const innerMm = env.innerDepth.known ? env.innerDepth.value : 160;
+  const spanX = innerMm + Math.max(w.overallWidthMm, tire.sectionMm) / 2 + 150;
 
-  const cam = state.camberDeg;
-  const px = (lat, rho) => X(camberX(lat, rho, cam));
-  const py = (lat, rho) => Y(camberX(rho, -lat, cam) * 0 + (rho * Math.cos(cam * Math.PI / 180) - lat * Math.sin(cam * Math.PI / 180)));
+  const axisY = H - 104;            // the spin axis is the datum
+  const scY = (axisY - 56) / topMm;
+  const hubX = 300;
+  const scX = Math.min(scY, (W - hubX - 190) / (spanX - innerMm), (hubX - 70) / innerMm);
+  const sc = Math.min(scY, scX);
 
-  // tyre cross-section: upper and lower, outer + inner sidewall
-  function tyrePath(sign) {
-    const pts = [];
-    const r0 = w.rimRadiusMm, r1 = tire.radiusMm, N = 16;
-    for (let i = 0; i <= N; i++) {
-      const rho = sign * (r0 + (r1 - r0) * (i / N));
-      const h = halfWidthAt(rho, tire, r0, w.overallWidthMm);
-      pts.push([px(w.centrePlaneX - h, rho), py(w.centrePlaneX - h, rho)]);
-    }
-    const rt = sign * r1, th = tire.treadWidthMm / 2;
-    pts.push([px(w.centrePlaneX - th, rt), py(w.centrePlaneX - th, rt)]);
-    pts.push([px(w.centrePlaneX + th, rt), py(w.centrePlaneX + th, rt)]);
-    for (let i = N; i >= 0; i--) {
-      const rho = sign * (r0 + (r1 - r0) * (i / N));
-      const h = halfWidthAt(rho, tire, r0, w.overallWidthMm);
-      pts.push([px(w.centrePlaneX + h, rho), py(w.centrePlaneX + h, rho)]);
-    }
-    return 'M' + pts.map(p => fmt(p[0], 1) + ',' + fmt(p[1], 1)).join('L') + 'Z';
-  }
-
-  // rim barrel, upper and lower
-  function rimPath(sign) {
-    const R = w.rimRadiusMm, fl = R + 5, dr = R - 22;
-    const ib = w.innerFlangeX + w.flangeInnerMm, ob = w.outerFlangeX - w.flangeOuterMm;
-    const seq = [[fl, w.innerFlangeX], [R, w.innerFlangeX + 1], [R, ib], [dr, ib + 10],
-                 [dr, ob - 14], [R, ob], [R, w.outerFlangeX - 1], [fl, w.outerFlangeX]];
-    const pts = seq.map(([r, lat]) => [px(lat, sign * r), py(lat, sign * r)]);
-    const inner = seq.slice().reverse().map(([r, lat]) => {
-      const rr = sign * (r - 9);
-      return [px(lat, rr), py(lat, rr)];
-    });
-    return 'M' + pts.concat(inner).map(p => fmt(p[0], 1) + ',' + fmt(p[1], 1)).join('L') + 'Z';
-  }
+  const X = mm => hubX + mm * sc;
+  const Y = mm => axisY - mm * sc;
+  const cam = state.camberDeg, t = cam * Math.PI / 180;
+  const px = (lat, rho) => X(lat * Math.cos(t) + rho * Math.sin(t));
+  const py = (lat, rho) => Y(rho * Math.cos(t) - lat * Math.sin(t));
 
   const archVerdict = (cl.results.find(r => r.id === 'fender_lip' && r.cond === 'static') || {}).verdict || 'indeterminate';
   const innerVerdict = (cl.results.find(r => r.id === 'inner' && r.cond === 'static') || {}).verdict || 'indeterminate';
   const vcol = v => 'var(--' + (v === 'clear' ? 'ok' : v === 'marginal' ? 'warn' : v === 'interference' ? 'bad' : 'gray') + ')';
+  const P = pts => 'M' + pts.map(p => fmt(p[0], 1) + ',' + fmt(p[1], 1)).join('L') + 'Z';
 
-  let s = '';
-  s += '<defs>'
+  let s = '<defs>'
     + '<linearGradient id="met" x1="0" y1="0" x2="0" y2="1">'
-    + '<stop offset="0" stop-color="#e3e9ef"/><stop offset=".45" stop-color="#9aa5b0"/>'
-    + '<stop offset=".55" stop-color="#c3ccd4"/><stop offset="1" stop-color="#78828d"/></linearGradient>'
+    + '<stop offset="0" stop-color="#e6ecf2"/><stop offset=".4" stop-color="#aab4bf"/>'
+    + '<stop offset=".62" stop-color="#ccd4dc"/><stop offset="1" stop-color="#7e8894"/></linearGradient>'
+    + '<marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">'
+    + '<path d="M0,1.2 L7,4 L0,6.8" fill="var(--fg2)"/></marker>'
     + '</defs>';
 
-  // ground
-  const groundY = py(0, -tire.radiusMm);
-  s += '<line x1="40" y1="' + fmt(groundY, 1) + '" x2="' + (W - 30) + '" y2="' + fmt(groundY, 1) + '" stroke="var(--line2)" stroke-width="1.5"/>';
-  s += '<text x="44" y="' + fmt(groundY + 15, 1) + '" class="dim">GROUND</text>';
-
-  // fender arch: arc of radius archR about the hub, lip at archLateral
+  // --- fender, in section: the lip as a point, the skin running outboard
   if (archR !== null && env.archLateral.known) {
     const lipX = env.archLateral.value + (ARCH_GAIN[S.archMod] || 0);
-    const r = archR * sc;
-    s += '<path d="M' + fmt(X(lipX) - r * 0.92, 1) + ',' + fmt(cy - r * 0.39, 1)
-      + ' A' + fmt(r, 1) + ',' + fmt(r, 1) + ' 0 0 1 ' + fmt(X(lipX) + r * 0.2, 1) + ',' + fmt(cy - r * 0.98, 1)
-      + '" fill="none" stroke="' + vcol(archVerdict) + '" stroke-width="3" stroke-linecap="round" opacity=".5"/>';
-    // the lip itself, at the top of the arch
-    s += '<circle cx="' + fmt(X(lipX), 1) + '" cy="' + fmt(Y(archR), 1) + '" r="5" fill="' + vcol(archVerdict) + '"/>';
-    s += '<line x1="' + fmt(X(lipX), 1) + '" y1="' + fmt(Y(archR), 1) + '" x2="' + (W - 150) + '" y2="' + fmt(Y(archR), 1) + '" stroke="var(--line2)" stroke-width=".8" stroke-dasharray="3 3"/>';
-    s += '<text x="' + (W - 146) + '" y="' + fmt(Y(archR) - 5, 1) + '" class="dim">FENDER LIP</text>';
-    s += '<text x="' + (W - 146) + '" y="' + fmt(Y(archR) + 10, 1) + '" class="dim2">' + fmt(archR) + ' mm from hub</text>';
-    // wheel well ceiling
-    if (env.wellCeiling.known) {
-      const wc = env.wellCeiling.value - state.dropMm;
-      s += '<line x1="' + fmt(X(lipX) - 150, 1) + '" y1="' + fmt(Y(wc), 1) + '" x2="' + fmt(X(lipX) + 30, 1) + '" y2="' + fmt(Y(wc), 1) + '" stroke="var(--line2)" stroke-width="2" opacity=".55"/>';
-      s += '<text x="' + fmt(X(lipX) - 148, 1) + '" y="' + fmt(Y(wc) - 6, 1) + '" class="dim">WELL CEILING</text>';
+    const lx = X(lipX), ly = Y(archR), col = vcol(archVerdict);
+    s += '<path d="M' + fmt(lx, 1) + ',' + fmt(ly + 13, 1)
+      + ' Q' + fmt(lx - 3, 1) + ',' + fmt(ly + 1, 1) + ' ' + fmt(lx + 11, 1) + ',' + fmt(ly - 3, 1)
+      + ' L' + (W - 142) + ',' + fmt(ly - 14, 1) + '" fill="none" stroke="' + col + '" stroke-width="3.4" stroke-linecap="round"/>';
+    s += '<circle cx="' + fmt(lx, 1) + '" cy="' + fmt(ly, 1) + '" r="4" fill="' + col + '"/>';
+    s += '<text x="' + (W - 138) + '" y="' + fmt(ly - 10, 1) + '" class="dim">FENDER LIP</text>';
+    s += '<text x="' + (W - 138) + '" y="' + fmt(ly + 5, 1) + '" class="dim2">' + fmt(archR) + ' mm radius</text>';
+    // vertical arch gap, tread to lip height
+    s += '<line x1="' + fmt(X(w.centrePlaneX), 1) + '" y1="' + fmt(Y(tire.radiusMm), 1)
+      + '" x2="' + fmt(X(w.centrePlaneX), 1) + '" y2="' + fmt(ly, 1)
+      + '" stroke="var(--fg2)" stroke-width="1" marker-end="url(#ar)"/>';
+    if (cl.archGapMm !== null)
+      s += '<text x="' + fmt(X(w.centrePlaneX) + 6, 1) + '" y="' + fmt((Y(tire.radiusMm) + ly) / 2, 1)
+        + '" class="dimg">GAP ' + fmt(cl.archGapMm) + ' mm</text>';
+    // lateral clearance at the lip, the number that decides rubbing
+    const res = cl.results.find(r => r.id === 'fender_lip' && r.cond === 'static');
+    if (res && res.d !== null) {
+      const ex = lx - res.d * sc;
+      s += '<line x1="' + fmt(ex, 1) + '" y1="' + fmt(ly, 1) + '" x2="' + fmt(lx, 1) + '" y2="' + fmt(ly, 1) + '" stroke="' + col + '" stroke-width="2.4"/>';
+      s += '<text x="' + fmt(ex - 4, 1) + '" y="' + fmt(ly - 8, 1) + '" class="dimg" text-anchor="end" style="fill:' + col + '">' + fmt(res.d, 1) + ' mm</text>';
+    }
+  }
+  if (wellC !== null) {
+    const wy = Y(wellC);
+    if (wy > 50) {
+      s += '<line x1="' + fmt(X(-innerMm) - 14, 1) + '" y1="' + fmt(wy, 1) + '" x2="' + fmt(X(env.archLateral.known ? env.archLateral.value : 90) + 8, 1)
+        + '" y2="' + fmt(wy, 1) + '" stroke="var(--line2)" stroke-width="2.6" opacity=".6"/>';
+      s += '<text x="' + fmt(X(-innerMm) - 12, 1) + '" y="' + fmt(wy - 7, 1) + '" class="dim">WELL CEILING ' + fmt(wellC) + ' mm</text>';
+    } else {
+      // above the frame: state it rather than stretch the drawing to reach it
+      const wr = cl.results.find(r => r.id === 'well_ceiling' && r.cond === 'static');
+      s += '<text x="40" y="58" class="dim">WELL CEILING ' + fmt(wellC) + ' mm, above frame'
+        + (wr && wr.d !== null ? ' \u00b7 ' + fmt(wr.d, 1) + ' mm over the tread' : '') + '</text>';
     }
   }
 
-  // inner obstruction
+  // --- inner obstruction
   if (env.innerDepth.known) {
-    const d = env.innerDepth.value;
-    const x0 = X(-d), x1 = X(-d + 44);
-    const yTop = Y(215), yBot = Y(60);
-    s += '<rect x="' + fmt(x0, 1) + '" y="' + fmt(yTop, 1) + '" width="' + fmt(x1 - x0, 1) + '" height="' + fmt(yBot - yTop, 1) + '" rx="5" fill="' + vcol(innerVerdict) + '" opacity=".3" stroke="' + vcol(innerVerdict) + '" stroke-width="1.5"/>';
-    s += '<text x="' + fmt(x0 + 3, 1) + '" y="' + fmt(yTop - 7, 1) + '" class="dim">' + (S.axle === 'front' ? 'STRUT' : 'ARM') + '</text>';
+    const x0 = X(-innerMm), x1 = X(-innerMm + 46);
+    const yT = Y(240), yB = Y(55);
+    s += '<rect x="' + fmt(x0, 1) + '" y="' + fmt(yT, 1) + '" width="' + fmt(x1 - x0, 1) + '" height="' + fmt(yB - yT, 1)
+      + '" rx="5" fill="' + vcol(innerVerdict) + '" opacity=".26" stroke="' + vcol(innerVerdict) + '" stroke-width="1.5"/>';
+    s += '<text x="' + fmt(x0, 1) + '" y="' + fmt(yT - 8, 1) + '" class="dim">' + (S.axle === 'front' ? 'STRUT / SPRING' : 'TRAILING ARM') + '</text>';
+    const ri = cl.results.find(r => r.id === 'inner' && r.cond === 'static');
+    if (ri && ri.d !== null) {
+      const yd = Y(205);
+      s += '<line x1="' + fmt(x1, 1) + '" y1="' + fmt(yd, 1) + '" x2="' + fmt(x1 + ri.d * sc, 1) + '" y2="' + fmt(yd, 1)
+        + '" stroke="' + vcol(innerVerdict) + '" stroke-width="2.4"/>';
+      s += '<text x="' + fmt(x1 + 2, 1) + '" y="' + fmt(yd - 7, 1) + '" class="dimg" style="fill:'
+        + vcol(innerVerdict) + '">' + fmt(ri.d, 1) + ' mm</text>';
+    }
   }
 
-  // tyre then rim, lower first so the upper reads on top
-  s += '<path d="' + tyrePath(-1) + '" fill="var(--rubber)" stroke="var(--line2)" stroke-width="1"/>';
-  s += '<path d="' + tyrePath(1) + '" fill="var(--rubber)" stroke="var(--line2)" stroke-width="1"/>';
-  s += '<path d="' + rimPath(-1) + '" fill="url(#met)" stroke="var(--line2)" stroke-width=".8"/>';
-  s += '<path d="' + rimPath(1) + '" fill="url(#met)" stroke="var(--line2)" stroke-width=".8"/>';
+  // --- tyre upper cross-section, sampled from the solver's own profile
+  {
+    const r0 = w.rimRadiusMm, r1 = tire.radiusMm, N = 18, pts = [];
+    for (let i = 0; i <= N; i++) {
+      const rho = r0 + (r1 - r0) * (i / N);
+      const h = halfWidthAt(rho, tire, r0, w.overallWidthMm);
+      pts.push([px(w.centrePlaneX - h, rho), py(w.centrePlaneX - h, rho)]);
+    }
+    const th = tire.treadWidthMm / 2;
+    pts.push([px(w.centrePlaneX - th, r1), py(w.centrePlaneX - th, r1)]);
+    pts.push([px(w.centrePlaneX + th, r1), py(w.centrePlaneX + th, r1)]);
+    for (let i = N; i >= 0; i--) {
+      const rho = r0 + (r1 - r0) * (i / N);
+      const h = halfWidthAt(rho, tire, r0, w.overallWidthMm);
+      pts.push([px(w.centrePlaneX + h, rho), py(w.centrePlaneX + h, rho)]);
+    }
+    s += '<path d="' + P(pts) + '" fill="var(--rubber)" stroke="var(--line2)" stroke-width="1"/>';
+  }
 
-  // hub mounting plane and wheel centre plane
-  s += '<line x1="' + fmt(X(0), 1) + '" y1="' + fmt(cy - 150, 1) + '" x2="' + fmt(X(0), 1) + '" y2="' + fmt(cy + 150, 1) + '" stroke="var(--gold)" stroke-width="1.6" stroke-dasharray="7 4"/>';
-  s += '<text x="' + fmt(X(0) + 5, 1) + '" y="' + fmt(cy + 164, 1) + '" class="dimg">HUB FACE  x=0</text>';
-  s += '<line x1="' + fmt(X(w.centrePlaneX), 1) + '" y1="' + fmt(cy - 120, 1) + '" x2="' + fmt(X(w.centrePlaneX), 1) + '" y2="' + fmt(cy + 120, 1) + '" stroke="var(--fg2)" stroke-width="1" stroke-dasharray="2 4"/>';
-  s += '<text x="' + fmt(X(w.centrePlaneX) - 4, 1) + '" y="' + fmt(cy + 134, 1) + '" class="dim" text-anchor="end">CENTRE PLANE</text>';
+  // --- rim barrel section
+  {
+    const R = w.rimRadiusMm, fl = R + 5, dr = R - 22;
+    const ib = w.innerFlangeX + w.flangeInnerMm, ob = w.outerFlangeX - w.flangeOuterMm;
+    const seq = [[fl, w.innerFlangeX], [R, w.innerFlangeX + 1], [R, ib], [dr, ib + 10],
+                 [dr, ob - 14], [R, ob], [R, w.outerFlangeX - 1], [fl, w.outerFlangeX]];
+    const outer = seq.map(([r, lat]) => [px(lat, r), py(lat, r)]);
+    const inner = seq.slice().reverse().map(([r, lat]) => [px(lat, r - 10), py(lat, r - 10)]);
+    s += '<path d="' + P(outer.concat(inner)) + '" fill="url(#met)" stroke="var(--line2)" stroke-width=".8"/>';
+  }
 
-  // hub centre
-  s += '<circle cx="' + fmt(X(0), 1) + '" cy="' + fmt(cy, 1) + '" r="3.5" fill="var(--gold)"/>';
+  // --- centre disc: from the axis up to the barrel, at the face plane
+  {
+    const faceX = w.outerFlangeX - Math.max(asm.exposedLipIn * 25.4, 0);
+    const back = faceX - 11;
+    const topR = w.rimRadiusMm - 8;
+    const pts = [[px(back, 18), py(back, 18)], [px(faceX, 18), py(faceX, 18)],
+                 [px(faceX, topR), py(faceX, topR)], [px(back, topR), py(back, topR)]];
+    s += '<path d="' + P(pts) + '" fill="url(#met)" stroke="var(--line2)" stroke-width=".8"/>';
+    s += '<text x="' + fmt(px(faceX, topR * 0.52) + 7, 1) + '" y="' + fmt(py(faceX, topR * 0.52), 1) + '" class="dim">DISC</text>';
+  }
 
-  // dimension: backspacing
-  const dimY = cy + 196;
-  s += '<line x1="' + fmt(X(w.innerFlangeX), 1) + '" y1="' + fmt(dimY, 1) + '" x2="' + fmt(X(0), 1) + '" y2="' + fmt(dimY, 1) + '" stroke="var(--fg2)" stroke-width="1" marker-start="url(#ar)" marker-end="url(#ar)"/>';
-  s += '<text x="' + fmt((X(w.innerFlangeX) + X(0)) / 2, 1) + '" y="' + fmt(dimY - 6, 1) + '" class="dimg" text-anchor="middle">BS ' + fmt(w.backspacingIn, 2) + '"</text>';
-  const dimY2 = cy + 218;
-  s += '<line x1="' + fmt(X(0), 1) + '" y1="' + fmt(dimY2, 1) + '" x2="' + fmt(X(w.outerFlangeX), 1) + '" y2="' + fmt(dimY2, 1) + '" stroke="var(--fg2)" stroke-width="1"/>';
-  s += '<text x="' + fmt((X(0) + X(w.outerFlangeX)) / 2, 1) + '" y="' + fmt(dimY2 + 13, 1) + '" class="dimg" text-anchor="middle">FS ' + fmt(w.frontspacingIn, 2) + '"  (lip ' + fmt(asm.exposedLipIn, 2) + '")</text>';
+  // --- datum: the spin axis
+  s += '<line x1="56" y1="' + fmt(axisY, 1) + '" x2="' + (W - 40) + '" y2="' + fmt(axisY, 1) + '" stroke="var(--gold)" stroke-width="1.2" stroke-dasharray="14 4 3 4" opacity=".8"/>';
+  s += '<text x="58" y="' + fmt(axisY + 14, 1) + '" class="dimg">SPIN AXIS · HALF-SECTION</text>';
 
-  s += '<text x="' + (W - 30) + '" y="' + (H - 12) + '" class="dim2" text-anchor="end">camber ' + fmt(state.camberDeg, 2) + '° · outboard →</text>';
-  s += '<text x="40" y="26" class="dimg">TRANSVERSE SECTION THROUGH THE AXLE · ' + S.axle.toUpperCase() + '</text>';
-  s += '<text x="40" y="42" class="dim2">' + fmt(asm.achievedWidthIn, 1) + 'J×' + A.cfg.d + ' ET' + fmt(asm.achievedEtMm) + ' · ' + A.cfg.sec + '/' + A.cfg.asp + 'R' + A.cfg.d + '</text>';
+  // --- hub mounting plane and wheel centre plane
+  s += '<line x1="' + fmt(X(0), 1) + '" y1="' + fmt(axisY + 4, 1) + '" x2="' + fmt(X(0), 1) + '" y2="' + fmt(Y(w.rimRadiusMm + 26), 1) + '" stroke="var(--gold)" stroke-width="1.5" stroke-dasharray="7 4"/>';
+  s += '<text x="' + fmt(X(0), 1) + '" y="' + fmt(Y(w.rimRadiusMm + 32), 1) + '" class="dimg" text-anchor="middle">HUB FACE x=0</text>';
+  s += '<line x1="' + fmt(X(w.centrePlaneX), 1) + '" y1="' + fmt(axisY + 4, 1) + '" x2="' + fmt(X(w.centrePlaneX), 1) + '" y2="' + fmt(Y(tire.radiusMm * 0.55), 1) + '" stroke="var(--fg2)" stroke-width=".9" stroke-dasharray="2 4"/>';
 
-  return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Transverse cross-section of the wheel and tyre against the fender arch and inner obstruction">'
-    + '<defs><marker id="ar" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto">'
-    + '<path d="M0,1 L6,3.5 L0,6" fill="none" stroke="var(--fg2)" stroke-width="1"/></marker></defs>'
-    + s + '</svg>';
+  // --- dimension stack below the axis
+  const d1 = axisY + 30, d1b = axisY + 50, d2 = axisY + 70;
+  const dline = (xa, xb, y, label, cls) =>
+    '<line x1="' + fmt(xa, 1) + '" y1="' + fmt(y, 1) + '" x2="' + fmt(xb, 1) + '" y2="' + fmt(y, 1)
+    + '" stroke="var(--fg2)" stroke-width="1" marker-start="url(#ar)" marker-end="url(#ar)"/>'
+    + '<text x="' + fmt((xa + xb) / 2, 1) + '" y="' + fmt(y - 5, 1) + '" class="' + (cls || 'dimg') + '" text-anchor="middle">' + label + '</text>';
+  s += dline(X(w.innerFlangeX), X(0), d1, 'BACKSPACING ' + fmt(w.backspacingIn, 2) + '"');
+  s += dline(X(0), X(w.outerFlangeX), d1, 'FRONTSPACING ' + fmt(w.frontspacingIn, 2) + '"');
+  s += dline(X(w.innerFlangeX), X(w.outerFlangeX), d2, fmt(asm.achievedWidthIn, 2) + 'J · ET' + fmt(asm.achievedEtMm, 1) + ' · visible lip ' + fmt(asm.exposedLipIn, 2) + '"');
+
+  // --- heading
+  s += '<text x="40" y="26" class="dimg">HALF-SECTION THROUGH THE AXLE · ' + S.axle.toUpperCase() + '</text>';
+  s += '<text x="40" y="41" class="dim2">' + fmt(asm.achievedWidthIn, 1) + 'J×' + A.cfg.d + ' ET' + fmt(asm.achievedEtMm)
+    + ' · ' + A.cfg.sec + '/' + A.cfg.asp + 'R' + A.cfg.d + ' · camber ' + fmt(state.camberDeg, 2) + '°</text>';
+  s += '<text x="' + (W - 40) + '" y="26" class="dim" text-anchor="end">outboard →</text>';
+
+  return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Half-section through the axle showing the rim, tyre, fender lip and inner obstruction with clearance dimensions">' + s + '</svg>';
 }
 
 /* --- 2. Head-on arch view: what the fitment actually looks like. --- */
@@ -821,18 +1209,17 @@ function drawArch(A) {
   const vcol = v => 'var(--' + (v === 'clear' ? 'ok' : v === 'marginal' ? 'warn' : v === 'interference' ? 'bad' : 'gray') + ')';
 
   let s = '';
-  // body + arch opening
+  // Body and arch opening: the arch is a semicircle of radius archR about the
+  // hub, and the sill runs out from each end of it to the frame edge.
   if (archR !== null) {
     const r = archR * sc;
-    s += '<path d="M' + fmt(cx - 400, 1) + ',' + fmt(groundY, 1)
-      + ' L' + fmt(cx - 400, 1) + ',' + fmt(cy - r * 0.2, 1)
-      + ' A' + fmt(r, 1) + ',' + fmt(r, 1) + ' 0 0 1 ' + fmt(cx + r, 1) + ',' + fmt(cy, 1)
-      + ' L' + fmt(cx + 400, 1) + ',' + fmt(cy, 1)
-      + ' L' + fmt(cx + 400, 1) + ',' + fmt(groundY, 1) + '" fill="none" stroke="var(--line2)" stroke-width="1"/>';
+    const sill = cy + 6;
+    s += '<line x1="46" y1="' + fmt(sill, 1) + '" x2="' + fmt(cx - r, 1) + '" y2="' + fmt(sill, 1) + '" stroke="var(--line2)" stroke-width="1.6"/>';
+    s += '<line x1="' + fmt(cx + r, 1) + '" y1="' + fmt(sill, 1) + '" x2="' + (W - 46) + '" y2="' + fmt(sill, 1) + '" stroke="var(--line2)" stroke-width="1.6"/>';
     s += '<path d="M' + fmt(cx - r, 1) + ',' + fmt(cy, 1)
       + ' A' + fmt(r, 1) + ',' + fmt(r, 1) + ' 0 0 1 ' + fmt(cx + r, 1) + ',' + fmt(cy, 1)
       + '" fill="none" stroke="' + vcol(archVerdict) + '" stroke-width="3.5" stroke-linecap="round"/>';
-    s += '<text x="' + fmt(cx + r + 8, 1) + '" y="' + fmt(cy - 6, 1) + '" class="dim">ARCH LIP</text>';
+    s += '<text x="' + fmt(cx + r + 10, 1) + '" y="' + fmt(cy - 8, 1) + '" class="dim">ARCH LIP</text>';
   }
   // tyre, as an annulus, camber-tilted
   const tr = tire.radiusMm * sc, rr = w.rimRadiusMm * sc;
@@ -843,9 +1230,9 @@ function drawArch(A) {
   const fin = FINISHES.find(f => f.id === A.cfg.lipFin) || FINISHES[0];
   const faceFin = FINISHES.find(f => f.id === A.cfg.faceFin) || FINISHES[3];
   s += '<circle cx="' + fmt(cx, 1) + '" cy="' + fmt(cy, 1) + '" r="' + fmt(rr, 1) + '" fill="' + fin.hex + '"/>';
-  // face
+  // face: windows open to the barrel behind, spokes in the face finish
   const faceR = rr * 0.88;
-  s += '<circle cx="' + fmt(cx, 1) + '" cy="' + fmt(cy, 1) + '" r="' + fmt(faceR, 1) + '" fill="' + faceFin.hex + '"/>';
+  s += '<circle cx="' + fmt(cx, 1) + '" cy="' + fmt(cy, 1) + '" r="' + fmt(faceR, 1) + '" fill="var(--rubber2)"/>';
   s += spokes(A, cx, cy, faceR, faceFin.hex);
   s += '</g>';
   // ground
@@ -871,28 +1258,43 @@ function spokes(A, cx, cy, R, col) {
   const f = FACES.find(x => x.id === A.cfg.face) || FACES[0];
   const hubR = R * f.hub;
   let s = '';
-  const bar = (a, wid, len, r0) => {
+  // `tilt` is the spoke's angle RELATIVE to the radius it sits on. Leaving it
+  // at zero gives plain radial spokes; a non-zero tilt on two opposing sets
+  // is what makes a mesh read as a lattice rather than a sunburst.
+  const bar = (a, wid, len, r0, tilt) => {
+    const t = tilt || 0;
     const x = cx + Math.cos(a) * (r0 + len / 2), y = cy + Math.sin(a) * (r0 + len / 2);
-    return '<rect x="' + fmt(x - len / 2, 1) + '" y="' + fmt(y - wid / 2, 1) + '" width="' + fmt(len, 1) + '" height="' + fmt(wid, 1)
-      + '" rx="' + fmt(Math.min(wid / 2, 3), 1) + '" fill="' + col + '" transform="rotate(' + fmt(a * 180 / Math.PI, 1) + ' ' + fmt(x, 1) + ' ' + fmt(y, 1) + ')"/>';
+    const L = len * (1 + Math.abs(t) * 0.22);
+    return '<rect x="' + fmt(x - L / 2, 1) + '" y="' + fmt(y - wid / 2, 1) + '" width="' + fmt(L, 1) + '" height="' + fmt(wid, 1)
+      + '" rx="' + fmt(Math.min(wid / 2, 3), 1) + '" fill="' + col + '" transform="rotate('
+      + fmt((a + t) * 180 / Math.PI, 1) + ' ' + fmt(x, 1) + ' ' + fmt(y, 1) + ')"/>';
   };
   const len = R - hubR;
   const n = f.n;
-  if (f.arch === 'mesh' || f.arch === 'multi_spoke') {
-    const k = f.arch === 'mesh' ? Math.round(n / 2) : n;
-    const wd = f.arch === 'mesh' ? R * 0.045 : R * 0.055;
-    for (let i = 0; i < k; i++) { const a = (i / k) * Math.PI * 2; s += bar(a + 0.3, wd, len, hubR); }
-    if (f.arch === 'mesh') for (let i = 0; i < k; i++) { const a = (i / k) * Math.PI * 2 + Math.PI / k; s += bar(a - 0.3, wd, len, hubR); }
+  if (f.arch === 'mesh') {
+    const k = n, wd = R * 0.036;
+    for (let i = 0; i < k; i++) s += bar((i / k) * Math.PI * 2, wd, len, hubR, 0.34);
+    for (let i = 0; i < k; i++) s += bar((i / k) * Math.PI * 2 + Math.PI / k, wd, len, hubR, -0.34);
+  } else if (f.arch === 'honeycomb') {
+    const k = n, wd = R * 0.045;
+    for (let i = 0; i < k; i++) s += bar((i / k) * Math.PI * 2, wd, len, hubR, 0.22);
+    for (let i = 0; i < k; i++) s += bar((i / k) * Math.PI * 2 + Math.PI / k, wd, len, hubR, -0.22);
+  } else if (f.arch === 'multi_spoke') {
+    for (let i = 0; i < n; i++) s += bar((i / n) * Math.PI * 2, R * 0.05, len, hubR, 0);
   } else if (f.arch === 'split_spoke') {
     const k = Math.round(n / 2);
-    for (let i = 0; i < k; i++) { const a = (i / k) * Math.PI * 2; s += bar(a + 0.09, R * 0.085, len, hubR); s += bar(a - 0.09, R * 0.085, len, hubR); }
+    for (let i = 0; i < k; i++) {
+      const a = (i / k) * Math.PI * 2;
+      s += bar(a, R * 0.08, len, hubR, 0.17);
+      s += bar(a, R * 0.08, len, hubR, -0.17);
+    }
   } else if (f.arch === 'turbine') {
-    for (let i = 0; i < n; i++) { const a = (i / n) * Math.PI * 2; s += bar(a + 0.42, R * 0.2, len, hubR); }
+    for (let i = 0; i < n; i++) s += bar((i / n) * Math.PI * 2, R * 0.2, len, hubR, 0.34);
   } else {
-    for (let i = 0; i < n; i++) { const a = (i / n) * Math.PI * 2; s += bar(a, R * 0.26, len, hubR); }
+    for (let i = 0; i < n; i++) s += bar((i / n) * Math.PI * 2, R * 0.25, len, hubR, 0);
   }
-  s += '<circle cx="' + fmt(cx, 1) + '" cy="' + fmt(cy, 1) + '" r="' + fmt(hubR, 1) + '" fill="' + col + '"/>';
-  s += '<circle cx="' + fmt(cx, 1) + '" cy="' + fmt(cy, 1) + '" r="' + fmt(hubR * 0.42, 1) + '" fill="var(--panel2)" opacity=".7"/>';
+  s += '<circle cx="' + fmt(cx, 1) + '" cy="' + fmt(cy, 1) + '" r="' + fmt(hubR * 1.06, 1) + '" fill="' + col + '"/>';
+  s += '<circle cx="' + fmt(cx, 1) + '" cy="' + fmt(cy, 1) + '" r="' + fmt(hubR * 0.4, 1) + '" fill="var(--panel2)" opacity=".75"/>';
   return s;
 }
 
@@ -901,8 +1303,8 @@ function drawFace(A) {
   const { asm } = A;
   const w = asm.wheel;
   const W = 860, H = 580;
-  const cx = W * 0.40, cy = H / 2;
-  const R = Math.min(H * 0.38, W * 0.26);
+  const cx = W * 0.355, cy = H / 2;
+  const R = Math.min(H * 0.355, W * 0.235);
   const sc = R / w.rimRadiusMm;
   const lipMm = asm.exposedLipIn * 25.4;
   const lipBand = Math.max(6, Math.min(R * 0.42, lipMm * sc * 2.2));
@@ -911,8 +1313,10 @@ function drawFace(A) {
   const faceFin = FINISHES.find(f => f.id === A.cfg.faceFin) || FINISHES[3];
 
   let s = '';
+  // lip and barrel ring
   s += '<circle cx="' + fmt(cx, 1) + '" cy="' + fmt(cy, 1) + '" r="' + fmt(R, 1) + '" fill="' + fin.hex + '" stroke="var(--line2)"/>';
-  s += '<circle cx="' + fmt(cx, 1) + '" cy="' + fmt(cy, 1) + '" r="' + fmt(faceR, 1) + '" fill="' + faceFin.hex + '"/>';
+  // the windows: open face, showing through to the barrel behind the spokes
+  s += '<circle cx="' + fmt(cx, 1) + '" cy="' + fmt(cy, 1) + '" r="' + fmt(faceR, 1) + '" fill="var(--rubber2)"/>';
   s += spokes(A, cx, cy, faceR, faceFin.hex);
   // assembly hardware on the flange circle
   const hw = asm.hardwareCount;
@@ -928,12 +1332,15 @@ function drawFace(A) {
     const a = (i / v.bolt[0]) * Math.PI * 2 - Math.PI / 2;
     s += '<circle cx="' + fmt(cx + Math.cos(a) * pcdR, 1) + '" cy="' + fmt(cy + Math.sin(a) * pcdR, 1) + '" r="5" fill="var(--panel)" stroke="var(--fg2)" stroke-width="1"/>';
   }
-  // lip callout
-  s += '<line x1="' + fmt(cx + faceR, 1) + '" y1="' + fmt(cy - R * 0.72, 1) + '" x2="' + fmt(cx + R, 1) + '" y2="' + fmt(cy - R * 0.72, 1) + '" stroke="var(--gold)" stroke-width="1.4"/>';
-  s += '<text x="' + fmt(cx + R + 10, 1) + '" y="' + fmt(cy - R * 0.72 + 4, 1) + '" class="dimg">LIP ' + fmt(asm.exposedLipIn, 2) + '"</text>';
+  // lip callout, kept clear of the spec block on the right
+  const ly2 = cy + R * 0.80;
+  s += '<line x1="' + fmt(cx + faceR * 0.58, 1) + '" y1="' + fmt(ly2, 1) + '" x2="' + fmt(cx + R * 0.76, 1) + '" y2="' + fmt(ly2, 1) + '" stroke="var(--gold)" stroke-width="1.4"/>';
+  s += '<text x="' + fmt(cx + faceR * 0.58 - 6, 1) + '" y="' + fmt(ly2 + 4, 1) + '" class="dimg" text-anchor="end">LIP ' + fmt(asm.exposedLipIn, 2) + '"</text>';
+  s += '<text x="' + fmt(cx, 1) + '" y="' + fmt(cy + R + 26, 1) + '" class="dim2" text-anchor="middle">'
+    + asm.hardwareCount + ' assembly bolts \u00b7 ' + A.veh.bolt[0] + '\u00d7' + A.veh.bolt[1] + ' bolt circle</text>';
 
   // spec block
-  const bx = W * 0.72;
+  const bx = W * 0.70;
   const rows = [
     ['Construction', A.cfg.construction === 'three_piece' ? '3-piece' : A.cfg.construction === 'two_piece' ? '2-piece' : 'monoblock'],
     ['Outer lip', fmt(A.cfg.lip, 1) + '"'],
@@ -1403,14 +1810,17 @@ function runOptimiser() {
 }
 
 /* ---- wiring ---- */
-function persist() { try { localStorage.setItem('rareform.v1', JSON.stringify(S)); } catch (e) { /* private window or blocked storage */ } }
-function renderAll() { renderControls(); renderOutput(); persist(); }
+function renderAll() { renderControls(); renderOutput(); }
 
 function bindSeg(id, fn) {
   [...$(id).querySelectorAll('button')].forEach(b => b.onclick = () => { fn(b.dataset.v); renderAll(); });
 }
 
 function init() {
+  loadSubs();
+  seedExamples();
+  [...document.querySelectorAll('#navseg button')].forEach(b =>
+    b.onclick = () => { S.page = b.dataset.v; renderPage(); });
   $('vehsel').onchange = e => { S.vehicleId = e.target.value; renderAll(); };
   $('pkgsel').onchange = e => { S.pkg = e.target.value; renderAll(); };
   $('dropF').oninput = e => { S.dropF = Number(e.target.value); renderAll(); };
@@ -1496,7 +1906,11 @@ function init() {
     const raw = localStorage.getItem('rareform.v1');
     if (raw) Object.assign(S, JSON.parse(raw));
   } catch (e) { /* private window or blocked storage: carry on */ }
-  renderAll();
+  const persist = () => { try { localStorage.setItem('rareform.v1', JSON.stringify(S)); } catch (e) {} };
+  const origRender = renderAll;
+  window.renderAll = function () { origRender(); persist(); };
+
+  renderPage();
 }
 
 let toastT;
@@ -1509,4 +1923,343 @@ function toast(msg) {
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
 else init();
+
+/* ============================================================
+   CONTRIBUTE + REVIEW VIEWS
+   ============================================================ */
+
+const CONTRIB = {
+  vehicleId: 'e30', axle: 'front', pkg: 'factory', drop: 0,
+  bodyOriginal: true, method: 'tape_measure', name: '',
+  wheel: { widthIn: '', diameterIn: '', etMm: '', tireSectionMm: '', tireAspect: '' },
+  values: {}, notes: '', justSubmitted: null,
+};
+let REVIEW_TAB = 'queue';
+
+function contribVariantKey() {
+  return vkey(CONTRIB.vehicleId, CONTRIB.axle, CONTRIB.pkg);
+}
+
+function draftSubmission() {
+  const vals = {};
+  for (const k of Object.keys(CONTRIB.values)) {
+    const raw = CONTRIB.values[k];
+    if (raw === '' || raw === undefined) continue;
+    const n = Number(raw);
+    if (isFinite(n)) vals[k] = n;
+  }
+  if (!Object.keys(vals).length) return null;
+  const w = CONTRIB.wheel;
+  const haveWheel = Object.keys(w).every(k => w[k] !== '' && isFinite(Number(w[k])));
+  return {
+    id: 'sub-' + Date.now().toString(36),
+    variantKey: contribVariantKey(),
+    vehicleId: CONTRIB.vehicleId, axle: CONTRIB.axle,
+    submitterId: 'me', submitterName: CONTRIB.name || 'you',
+    submitterVerified: false, submittedAt: new Date().toISOString(),
+    suspensionPackage: CONTRIB.pkg, rideHeightDropMm: CONTRIB.drop,
+    bodyOriginal: CONTRIB.bodyOriginal, method: CONTRIB.method,
+    wheelOnCar: haveWheel ? {
+      widthIn: Number(w.widthIn), diameterIn: Number(w.diameterIn), etMm: Number(w.etMm),
+      tireSectionMm: Number(w.tireSectionMm), tireAspect: Number(w.tireAspect),
+    } : null,
+    values: vals, notes: CONTRIB.notes, status: 'pending',
+  };
+}
+
+function renderContribute() {
+  const draft = draftSubmission();
+  const issues = draft ? validateSub(draft) : [];
+  const issueFor = k => issues.find(i => i.key === k);
+  const blocking = issues.filter(i => i.severity === 'reject');
+  const cons = aggregateVariant(contribVariantKey(), loadSubs());
+  const v = VEHICLES.find(x => x.id === CONTRIB.vehicleId) || VEHICLES[0];
+
+  const vehOpts = ['BMW', 'Mercedes-Benz', 'Porsche'].map(mk =>
+    '<optgroup label="' + mk + '">' + VEHICLES.filter(x => x.make === mk).map(x =>
+      opt(x.id, x.chassis + ' · ' + x.model + ' · ' + x.years, CONTRIB.vehicleId)).join('')
+    + '</optgroup>').join('');
+
+  const measureFields = MEAS_KEYS.map(k => {
+    const d = MEAS[k], iss = issueFor(k);
+    return '<div class="mfield">'
+      + '<label class="lb" for="cv_' + k + '">' + esc(d.label) + (d.core ? '' : ' — optional') + '</label>'
+      + '<div class="mrow"><input type="number" step="0.1" id="cv_' + k + '" value="' + esc(CONTRIB.values[k] ?? '')
+      + '" placeholder="' + d.range[0] + ' to ' + d.range[1] + '"><span class="munit">' + d.unit + '</span></div>'
+      + '<p class="note" style="margin-top:5px">' + esc(d.how) + '</p>'
+      + '<p class="note" style="margin-top:3px"><span class="gld">Why: </span>' + esc(d.why) + '</p>'
+      + (iss ? '<p class="note ' + (iss.severity === 'reject' ? 'bad' : 'warn') + '">' + esc(iss.message) + '</p>' : '')
+      + '</div>';
+  }).join('');
+
+  const subFlags = issues.filter(i => i.key === 'submission')
+    .map(i => '<p class="note warn">' + esc(i.message) + '</p>').join('');
+
+  const statusRows = CORE_KEYS.map(k => {
+    const c = cons.byKey[k];
+    const ok = isFinite(c.value) && !c.conflict;
+    return row(MEAS[k].label.split(',')[0],
+      ok ? fmt(c.value, 1) + ' ' + c.unit + ' · ' + c.agreeing + '/' + MIN_CORROBORATION : 'none yet',
+      ok ? '' : 'mute');
+  }).join('');
+
+  document.getElementById('page-contribute').innerHTML =
+    '<div class="pagehead">'
+    + '<h2>Contribute a measurement</h2>'
+    + '<p>Four dimensions turn a chassis from an estimate into something the engine will return a real '
+    + 'verdict on. Three independent people measuring the same variant is what promotes it for everybody.</p>'
+    + '</div>'
+
+    + '<div class="cols2">'
+    + '<div class="stack">'
+
+    + '<div class="card"><div class="chead"><h2>Which car, exactly</h2></div><div class="cbody">'
+    + '<p class="note warn" style="margin-top:0">Measurements only combine within an exact variant. A car on '
+    + 'sports suspension is not the same variant as one on standard springs, and an M3 arch is not an E30 arch. '
+    + 'If in doubt, say so in the notes rather than guessing.</p>'
+    + '<div class="row2" style="margin-top:10px">'
+    + '<div class="fld"><label class="lb" for="c_veh">Chassis</label><select id="c_veh">' + vehOpts + '</select></div>'
+    + '<div class="fld"><label class="lb" for="c_axle">Axle</label><select id="c_axle">'
+    + opt('front', 'Front', CONTRIB.axle) + opt('rear', 'Rear', CONTRIB.axle) + '</select></div>'
+    + '<div class="fld"><label class="lb" for="c_pkg">Suspension on the car</label><select id="c_pkg">'
+    + ['factory','lowering_springs','coilover_standard','coilover_short_stroke','air_driving']
+        .map(p => opt(p, PACKAGE[p].label, CONTRIB.pkg)).join('') + '</select></div>'
+    + '<div class="fld"><label class="lb" for="c_drop">Drop from stock, mm</label>'
+    + '<input type="number" id="c_drop" value="' + CONTRIB.drop + '"></div>'
+    + '<div class="fld"><label class="lb" for="c_name">Your name or handle</label>'
+    + '<input type="text" id="c_name" value="' + esc(CONTRIB.name) + '" placeholder="optional"></div>'
+    + '<div class="fld"><label class="lb" for="c_method">How you measured</label><select id="c_method">'
+    + Object.keys(METHOD_LABEL).map(m => opt(m, METHOD_LABEL[m], CONTRIB.method)).join('') + '</select></div>'
+    + '</div>'
+    + '<label class="chk"><input type="checkbox" id="c_orig"' + (CONTRIB.bodyOriginal ? ' checked' : '') + '>'
+    + '<span>Bodywork is original: arches never rolled, pulled, flared or repaired.</span></label>'
+    + '</div></div>'
+
+    + '<div class="card"><div class="chead"><h2>Wheel currently on the car</h2>'
+    + '<span class="lbl">enables the sanity check</span></div><div class="cbody">'
+    + '<p class="note" style="margin-top:0">Optional, and worth the thirty seconds. Knowing the fitted wheel lets '
+    + 'the form catch the commonest error immediately: an arch radius smaller than the tyre radius means the tape '
+    + 'went to the top of the tyre rather than to the hub centre.</p>'
+    + '<div class="row5" style="margin-top:10px">'
+    + [['widthIn','Width J'],['diameterIn','Dia in'],['etMm','ET mm'],['tireSectionMm','Section'],['tireAspect','Aspect']]
+        .map(([k, label]) => '<div class="fld"><label class="lb" for="cw_' + k + '">' + label + '</label>'
+          + '<input type="number" id="cw_' + k + '" value="' + esc(CONTRIB.wheel[k]) + '"></div>').join('')
+    + '</div></div></div>'
+
+    + '<div class="card"><div class="chead"><h2>Measurements</h2>'
+    + '<span class="lbl">' + esc(METHOD_LABEL[CONTRIB.method]) + '</span></div><div class="cbody">'
+    + '<p class="note" style="margin-top:0">How you measured sets the tolerance that can ever be claimed from '
+    + 'this. Agreement between tape measurements never adds up to caliper precision, and the engine will not '
+    + 'pretend otherwise.</p>'
+    + '<div class="mlist">' + measureFields + '</div>'
+    + '<div class="fld"><label class="lb" for="c_notes">Notes</label>'
+    + '<input type="text" id="c_notes" value="' + esc(CONTRIB.notes) + '" placeholder="anything a reviewer should know"></div>'
+    + subFlags
+    + (blocking.length ? '<p class="note bad">' + blocking.length + ' problem'
+        + (blocking.length === 1 ? '' : 's') + ' must be fixed before this can be submitted.</p>' : '')
+    + '<div class="btnrow" style="margin-top:12px"><button class="btn prime" id="c_submit">SUBMIT FOR REVIEW</button>'
+    + (CONTRIB.justSubmitted ? '<span class="num sml" style="color:var(--ok)">Submitted. It sits in the review '
+        + 'queue until somebody accepts it.</span>' : '')
+    + '</div></div></div>'
+
+    + '</div>'
+
+    + '<div class="stack">'
+    + '<div class="card"><div class="chead"><h2>This variant so far</h2>'
+    + gchip(cons.weakestCoreGrade) + '</div><div class="cbody">'
+    + '<p class="note" style="margin-top:0">' + esc(nextNeed(cons)) + '</p>'
+    + '<div style="margin-top:8px">' + statusRows + '</div>'
+    + (cons.excluded.length ? '<p class="note warn">' + cons.excluded.length + ' submission'
+        + (cons.excluded.length === 1 ? '' : 's') + ' held out of the consensus: '
+        + esc(cons.excluded[0].reason) + '</p>' : '')
+    + '<p class="note">' + esc(v.chassis + ' · ' + v.model + ' · ' + CONTRIB.axle + ' · ' + PACKAGE[CONTRIB.pkg].label) + '</p>'
+    + '</div></div>'
+
+    + '<div class="card"><div class="chead"><h2>Why three people</h2></div><div class="cbody">'
+    + '<p class="note" style="margin-top:0">One measurement is a data point. It could be a mis-read tape, a car '
+    + 'with a quietly repaired arch, or a variant nobody realised was different.</p>'
+    + '<p class="note">Three independent people arriving within a few millimetres of each other is evidence, and '
+    + 'the engine treats it as such: that variant starts returning real clearance verdicts instead of UNKNOWN. '
+    + 'Outliers are excluded rather than averaged in, and if the submissions split into two camps the engine '
+    + 'reports a disagreement instead of inventing a midpoint nobody measured.</p>'
+    + '</div></div>'
+    + '</div></div>';
+
+  // --- wiring
+  const bindVal = (id, fn) => { const el = document.getElementById(id); if (el) el.onchange = e => { fn(e.target.value); renderPage(); }; };
+  bindVal('c_veh', v2 => CONTRIB.vehicleId = v2);
+  bindVal('c_axle', v2 => CONTRIB.axle = v2);
+  bindVal('c_pkg', v2 => CONTRIB.pkg = v2);
+  bindVal('c_method', v2 => CONTRIB.method = v2);
+  bindVal('c_drop', v2 => CONTRIB.drop = Number(v2) || 0);
+  bindVal('c_name', v2 => CONTRIB.name = v2);
+  bindVal('c_notes', v2 => CONTRIB.notes = v2);
+  const orig = document.getElementById('c_orig');
+  if (orig) orig.onchange = e => { CONTRIB.bodyOriginal = e.target.checked; renderPage(); };
+  for (const k of Object.keys(CONTRIB.wheel)) {
+    const el = document.getElementById('cw_' + k);
+    if (el) el.onchange = e => { CONTRIB.wheel[k] = e.target.value; renderPage(); };
+  }
+  for (const k of MEAS_KEYS) {
+    const el = document.getElementById('cv_' + k);
+    if (el) el.onchange = e => { CONTRIB.values[k] = e.target.value; CONTRIB.justSubmitted = null; renderPage(); };
+  }
+  const sb = document.getElementById('c_submit');
+  if (sb) sb.onclick = () => {
+    const d = draftSubmission();
+    if (!d) { toast('Enter at least one measurement'); return; }
+    const res = addSub(d);
+    if (res.ok) { CONTRIB.justSubmitted = d.id; CONTRIB.values = {}; toast('Submitted for review'); renderPage(); }
+    else toast('Fix the flagged problems first');
+  };
+}
+
+/**
+ * One-dimensional plot of every submitted value, with the agreement band
+ * drawn and outliers ringed. A reviewer judging whether two numbers are
+ * the same measurement needs to SEE the spread; a column of figures hides
+ * exactly the thing being judged.
+ */
+function spreadSvg(c) {
+  if (!c.points.length) return '';
+  const vals = c.points.map(p => p.value);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const pad = Math.max((hi - lo) * 0.2, c.band, c.unit === '°' ? 0.2 : 1);
+  const min = lo - pad, max = hi + pad;
+  const W = 520, H = 60;
+  const X = v => 16 + ((v - min) / (max - min || 1)) * (W - 32);
+  const dp = c.unit === '°' ? 2 : 1;
+  const show = v => { const r = Number(v.toFixed(dp)); return Number.isInteger(r) ? String(r) : r.toFixed(dp); };
+  const col = c.conflict ? 'var(--bad)' : 'var(--ok)';
+  let s = '';
+  if (isFinite(c.value)) {
+    const a = X(c.value - c.band), b = X(c.value + c.band);
+    s += '<rect x="' + fmt(a, 1) + '" y="15" width="' + fmt(Math.max(b - a, 2), 1) + '" height="22" rx="3" fill="'
+      + col + '" opacity=".14" stroke="' + col + '" stroke-opacity=".45"/>';
+  }
+  s += '<line x1="16" y1="26" x2="' + (W - 16) + '" y2="26" stroke="var(--line2)"/>';
+  if (isFinite(c.value) && !c.conflict)
+    s += '<line x1="' + fmt(X(c.value), 1) + '" y1="11" x2="' + fmt(X(c.value), 1) + '" y2="41" stroke="var(--gold)" stroke-width="1.6"/>';
+  for (const p of c.points) {
+    s += '<circle cx="' + fmt(X(p.value), 1) + '" cy="26" r="' + (p.outlier ? 4 : 5) + '" fill="'
+      + (p.outlier ? 'none' : 'var(--gold)') + '" stroke="' + (p.outlier ? 'var(--bad)' : 'none')
+      + '" stroke-width="1.8"/>';
+    s += '<text x="' + fmt(X(p.value), 1) + '" y="52" text-anchor="middle" class="dim2" style="fill:'
+      + (p.outlier ? 'var(--bad)' : 'var(--mute)') + '">' + show(p.value) + '</text>';
+  }
+  s += '<text x="16" y="10" class="dim">' + (isFinite(c.value) && !c.conflict
+    ? 'band ±' + fmt(c.band, c.unit === '°' ? 2 : 1) + ' ' + c.unit : 'no agreed value') + '</text>';
+  return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Spread of submitted values">' + s + '</svg>';
+}
+
+function renderReview() {
+  const subs = loadSubs();
+  const pending = subs.filter(s => s.status === 'pending');
+  const keys = [...new Set(subs.map(s => s.variantKey))];
+
+  const describe = s => {
+    const v = VEHICLES.find(x => x.id === s.vehicleId);
+    return (v ? v.chassis + ' ' + v.model : s.vehicleId) + ' · ' + s.axle
+      + ' · ' + (PACKAGE[s.suspensionPackage] || {}).label
+      + (s.rideHeightDropMm ? ' · ' + s.rideHeightDropMm + ' mm drop' : '');
+  };
+
+  let body = '';
+  if (REVIEW_TAB === 'queue') {
+    if (pending.some(s => s.id.indexOf('example-') === 0))
+      body += '<p class="note warn">The queue is seeded with three EXAMPLE records so this page has something to '
+        + 'show. Their numbers are illustrative, not measured from a car. Accepting all three will promote the E30 '
+        + 'front variant to corroborated and change what the studio reports for it — which is the loop working, '
+        + 'but do it knowing the figures are invented. Reject them to clear the queue instead.</p>';
+    if (!pending.length)
+      body += '<div class="card"><div class="chead"><h2>Nothing pending</h2></div><div class="cbody">'
+        + '<p class="note" style="margin-top:0">The queue is empty. New submissions land here before they can '
+        + 'affect any consensus.</p></div></div>';
+    body += pending.map(s => {
+      const flags = validateSub(s).filter(i => i.severity === 'flag');
+      return '<div class="card"><div class="chead"><h2>' + esc(describe(s)) + '</h2>'
+        + '<span class="lbl">' + esc(s.submitterName || s.submitterId) + '</span></div><div class="cbody">'
+        + '<div class="row2">' + Object.keys(s.values).map(k =>
+            row(MEAS[k] ? MEAS[k].label.split(',')[0] : k, fmt(s.values[k], 2) + ' ' + (MEAS[k] ? MEAS[k].unit : ''))).join('')
+        + '</div>'
+        + '<p class="note">Method: ' + esc((s.method || '').replace(/_/g, ' '))
+        + (s.wheelOnCar ? ' · fitted ' + s.wheelOnCar.widthIn + 'J×' + s.wheelOnCar.diameterIn
+            + ' ET' + s.wheelOnCar.etMm + ', ' + s.wheelOnCar.tireSectionMm + '/' + s.wheelOnCar.tireAspect : '')
+        + (!s.bodyOriginal ? ' · BODYWORK MODIFIED' : '')
+        + (s.notes ? ' · ' + esc(s.notes) : '') + '</p>'
+        + flags.map(f => '<p class="note warn">' + esc(f.message) + '</p>').join('')
+        + '<div class="btnrow" style="margin-top:10px">'
+        + '<button class="btn prime rv-acc" data-id="' + esc(s.id) + '">ACCEPT</button>'
+        + '<button class="btn rv-rej" data-id="' + esc(s.id) + '">REJECT</button>'
+        + '</div></div></div>';
+    }).join('');
+  } else {
+    if (!keys.length)
+      body += '<div class="card"><div class="chead"><h2>No variants yet</h2></div>'
+        + '<div class="cbody"><p class="note" style="margin-top:0">Nothing has been submitted.</p></div></div>';
+    body += keys.map(k => {
+      const c = aggregateVariant(k, subs);
+      const parts = k.split('|');
+      const v = VEHICLES.find(x => x.id === parts[0]);
+      return '<div class="card"><div class="chead"><h2>'
+        + esc((v ? v.chassis + ' ' + v.model : parts[0]) + ' · ' + parts[1] + ' · '
+          + ((PACKAGE[parts[2]] || {}).label || parts[2])) + '</h2>'
+        + gchip(c.weakestCoreGrade) + '</div><div class="cbody">'
+        + '<p class="note' + (c.analysable ? '' : ' warn') + '" style="margin-top:0">' + esc(nextNeed(c)) + '</p>'
+        + MEAS_KEYS.map(mk => {
+            const cc = c.byKey[mk];
+            if (!cc.points.length) return '';
+            return '<div class="mblock">'
+              + '<div class="mhead"><span>' + esc(cc.label) + '</span>'
+              + '<span class="num" style="color:' + (cc.conflict ? 'var(--bad)' : 'var(--gold)') + '">'
+              + (isFinite(cc.value) && !cc.conflict
+                  ? fmt(cc.value, cc.unit === '°' ? 2 : 1) + ' ±' + fmt(cc.tolerance, 2) + ' ' + cc.unit
+                  : 'unresolved')
+              + ' ' + gchip(cc.grade) + '</span></div>'
+              + spreadSvg(cc)
+              + '<p class="note">' + esc(cc.note) + '</p>'
+              + '<p class="note">' + cc.agreeing + ' of ' + cc.distinct + ' submitters agree'
+              + (cc.agreeing < MIN_CORROBORATION && !cc.conflict ? ' · ' + cc.needsMore + ' more promotes it' : '')
+              + '</p></div>';
+          }).join('')
+        + (c.excluded.length ? '<p class="note warn">Held out of the consensus: ' + c.excluded.length
+            + ' submission' + (c.excluded.length === 1 ? '' : 's') + '. ' + esc(c.excluded[0].reason) + '</p>' : '')
+        + '</div></div>';
+    }).join('');
+  }
+
+  document.getElementById('page-review').innerHTML =
+    '<div class="pagehead"><h2>Review queue</h2>'
+    + '<p>Nothing is promoted automatically. Arithmetic rejects the impossible; a person decides whether what '
+    + 'is left really describes the variant.</p></div>'
+    + '<div class="seg" id="rvtabs" style="width:fit-content;margin-bottom:14px">'
+    + '<button data-v="queue" aria-pressed="' + (REVIEW_TAB === 'queue') + '">PENDING (' + pending.length + ')</button>'
+    + '<button data-v="variants" aria-pressed="' + (REVIEW_TAB === 'variants') + '">VARIANTS (' + keys.length + ')</button>'
+    + '</div>'
+    + '<div class="stack">' + body + '</div>';
+
+  [...document.querySelectorAll('#rvtabs button')].forEach(b =>
+    b.onclick = () => { REVIEW_TAB = b.dataset.v; renderPage(); });
+  [...document.querySelectorAll('.rv-acc')].forEach(b =>
+    b.onclick = () => { setSubStatus(b.dataset.id, 'accepted'); toast('Accepted'); renderPage(); });
+  [...document.querySelectorAll('.rv-rej')].forEach(b =>
+    b.onclick = () => { setSubStatus(b.dataset.id, 'rejected'); toast('Rejected'); renderPage(); });
+}
+
+/** Single-page routing: one of three views is visible at a time. */
+function renderPage() {
+  const page = S.page || 'studio';
+  document.getElementById('page-studio').hidden = page !== 'studio';
+  document.getElementById('page-contribute').hidden = page !== 'contribute';
+  document.getElementById('page-review').hidden = page !== 'review';
+  [...document.querySelectorAll('#navseg button')].forEach(b =>
+    b.setAttribute('aria-pressed', String(b.dataset.v === page)));
+  // the axle toggle drives the studio only; contribute and review each
+  // carry their own axle context
+  const ax = document.getElementById('axleseg');
+  if (ax) ax.hidden = page !== 'studio';
+  if (page === 'studio') renderAll();
+  else if (page === 'contribute') renderContribute();
+  else renderReview();
+}
 
